@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -10,6 +10,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
+
 
 import { AlertBanner } from '@shared/components/AlertBanner';
 import { MapView } from '@shared/components/MapView';
@@ -304,6 +305,27 @@ export function HospitalDashboard() {
   const [dispatchNotice, setDispatchNotice] = useState<string | null>(null);
   const [closestSuggestion, setClosestSuggestion] = useState<ClosestDriverSuggestion | null>(null);
   const [isResolvingRoute, setIsResolvingRoute] = useState(false);
+  const requestFilterRef = useRef<HTMLDivElement | null>(null);
+  const [filterIndicatorStyle, setFilterIndicatorStyle] = useState({ left: 0, width: 0, visible: false });
+
+  const syncFilterIndicator = useCallback(() => {
+    const container = requestFilterRef.current;
+    if (!container) {
+      return;
+    }
+
+    const activeChip = container.querySelector<HTMLButtonElement>('.filter-chip.active');
+    if (!activeChip) {
+      setFilterIndicatorStyle((current) => ({ ...current, visible: false }));
+      return;
+    }
+
+    setFilterIndicatorStyle({
+      left: activeChip.offsetLeft,
+      width: activeChip.offsetWidth,
+      visible: true,
+    });
+  }, []);
 
   useEffect(() => {
     if (!hospitalUser) {
@@ -367,6 +389,25 @@ export function HospitalDashboard() {
     if (!selectedDriverId) return;
     if (!opsState.drivers.some((d) => d.id === selectedDriverId)) setSelectedDriverId(null);
   }, [opsState.drivers, selectedDriverId]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncFilterIndicator);
+    const onResize = () => syncFilterIndicator();
+
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [syncFilterIndicator]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncFilterIndicator);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [requestFilter, syncFilterIndicator]);
 
   useEffect(() => {
     if (!closestSuggestion) return;
@@ -641,6 +682,7 @@ export function HospitalDashboard() {
           </div>
         </div>
 
+
         <nav className="hospital-sidebar-nav" aria-label="Hospital controls navigation">
           {hospitalSections.map((section) => (
             <button
@@ -661,6 +703,8 @@ export function HospitalDashboard() {
             </button>
           ))}
         </nav>
+
+
 
         {!isMobileViewport() && (
           <button
@@ -883,7 +927,16 @@ export function HospitalDashboard() {
             <section className="hospital-queue-layout">
               <section className="hospital-panel request-panel">
                 <div className="panel-head"><h2>Patient Queue</h2><p>Receive, triage, and dispatch.</p></div>
-                <div className="request-filters" role="tablist" aria-label="Request filters">
+                <div className="request-filters" role="tablist" aria-label="Request filters" ref={requestFilterRef}>
+                  <span
+                    className="request-filters-indicator"
+                    aria-hidden="true"
+                    style={{
+                      width: `${filterIndicatorStyle.width}px`,
+                      transform: `translateX(${filterIndicatorStyle.left}px)`,
+                      opacity: filterIndicatorStyle.visible ? 1 : 0,
+                    }}
+                  />
                   {requestFilters.map((f) => (
                     <button key={f.key} type="button" className={`filter-chip${requestFilter === f.key ? ' active' : ''}`} onClick={() => setRequestFilter(f.key)}>
                       {f.label}

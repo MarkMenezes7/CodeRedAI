@@ -1,3 +1,5 @@
+import { useState, type MouseEvent } from 'react';
+
 import './LandingPage.css';
 
 const heroStats = [
@@ -172,10 +174,18 @@ function WhatsAppIcon() {
 }
 
 export default function LandingPage() {
+  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+
+  const handleScrollToHowItWorks = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    const target = document.getElementById('how-it-works');
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <main className="landing-page">
       <section className="hero section-shell">
-        <div className="hero-left reveal">
+        <div className="hero-left reveal reveal-delay-1">
           <p className="eyebrow">Emergency Coordination Platform</p>
           <h1 className="hero-title">From HELP message to hospital handoff without delay.</h1>
           <p className="hero-sub">
@@ -193,7 +203,7 @@ export default function LandingPage() {
               <WhatsAppIcon />
               Send Help Now
             </a>
-            <a className="btn btn-secondary" href="#how-it-works">
+            <a className="btn btn-secondary" href="#how-it-works" onClick={handleScrollToHowItWorks}>
               See How It Works
             </a>
           </div>
@@ -218,7 +228,7 @@ export default function LandingPage() {
           </div>
         </div>
 
-        <aside className="hero-right reveal" aria-label="Emergency operations visual preview">
+        <aside className="hero-right reveal reveal-delay-2" aria-label="Emergency operations visual preview">
           <div className="image-collage">
             <figure className="photo-card photo-top">
               <img src={galleryImages.top} alt="Emergency doctor portrait" loading="lazy" />
@@ -250,7 +260,7 @@ export default function LandingPage() {
         </aside>
       </section>
 
-      <section className="trust-band section-shell reveal" aria-label="Trusted partners and outcomes">
+      <section className="trust-band section-shell reveal reveal-delay-3" aria-label="Trusted partners and outcomes">
         <p className="trust-heading">Trusted by emergency networks, hospital operators, and ambulance partners.</p>
         <ul className="partner-list" aria-label="Healthcare and emergency partners">
           {trustPartners.map((partner) => (
@@ -274,8 +284,8 @@ export default function LandingPage() {
         </div>
 
         <div className="workflow-grid">
-          {workflowSteps.map((step) => (
-            <article className="workflow-card reveal" key={step.step}>
+          {workflowSteps.map((step, index) => (
+            <article className={`workflow-card reveal reveal-delay-${(index % 6) + 1}`} key={step.step}>
               <p className="workflow-step">{step.step}</p>
               <h3>{step.title}</h3>
               <p>{step.description}</p>
@@ -291,8 +301,8 @@ export default function LandingPage() {
         </div>
 
         <div className="role-grid">
-          {roleFeatureGroups.map((group) => (
-            <article className="role-card reveal" key={group.role}>
+          {roleFeatureGroups.map((group, index) => (
+            <article className={`role-card reveal reveal-delay-${(index % 6) + 1}`} key={group.role}>
               <div className="role-head">
                 <span className="role-icon" aria-hidden="true">
                   {group.icon}
@@ -326,8 +336,8 @@ export default function LandingPage() {
           </article>
 
           <div className="about-highlight-list">
-            {aboutHighlights.map((item) => (
-              <article className="about-highlight-item reveal" key={item.title}>
+            {aboutHighlights.map((item, index) => (
+              <article className={`about-highlight-item reveal reveal-delay-${(index % 6) + 1}`} key={item.title}>
                 <h3>{item.title}</h3>
                 <p>{item.description}</p>
               </article>
@@ -343,8 +353,8 @@ export default function LandingPage() {
         </div>
 
         <div className="testimonial-grid">
-          {testimonials.map((testimonial) => (
-            <article className="testimonial-card reveal" key={testimonial.name}>
+          {testimonials.map((testimonial, index) => (
+            <article className={`testimonial-card reveal reveal-delay-${(index % 6) + 1}`} key={testimonial.name}>
               <p className="testimonial-quote">"{testimonial.quote}"</p>
               <p className="testimonial-name">{testimonial.name}</p>
               <p className="testimonial-role">{testimonial.role}</p>
@@ -361,14 +371,28 @@ export default function LandingPage() {
 
         <div className="faq-list">
           {faqItems.map((item, index) => (
-            <details className="faq-item reveal" key={item.question} open={index === 0}>
-              <summary>
+            <details
+              className={`faq-item reveal reveal-delay-${(index % 6) + 1}`}
+              key={item.question}
+              open={openFaqIndex === index}
+            >
+              <summary
+                onClick={(event) => {
+                  event.preventDefault();
+                  setOpenFaqIndex((current) => (current === index ? null : index));
+                }}
+                aria-expanded={openFaqIndex === index}
+              >
                 <span>{item.question}</span>
                 <span className="faq-toggle" aria-hidden="true">
-                  +
+                  <span className="faq-toggle-icon" />
                 </span>
               </summary>
-              <p>{item.answer}</p>
+              <div className="faq-answer">
+                <div className="faq-answer-inner">
+                  <p>{item.answer}</p>
+                </div>
+              </div>
             </details>
           ))}
         </div>
@@ -384,7 +408,7 @@ export default function LandingPage() {
             <WhatsAppIcon />
             Send Help Now
           </a>
-          <a className="btn btn-secondary" href="#how-it-works">
+          <a className="btn btn-secondary" href="#how-it-works" onClick={handleScrollToHowItWorks}>
             See How It Works
           </a>
         </div>

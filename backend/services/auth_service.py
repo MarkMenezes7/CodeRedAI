@@ -111,12 +111,21 @@ def _build_callsign(name: str, email: str) -> str:
 
 
 def _build_hospital_user(doc: Dict[str, Any]) -> Dict[str, Any]:
+    location_out = None
+    if "location" in doc and doc["location"]:
+        loc = doc["location"]
+        if isinstance(loc, dict) and "coordinates" in loc:
+            # GeoJSON uses [lng, lat]
+            location_out = {"lng": loc["coordinates"][0], "lat": loc["coordinates"][1]}
+        else:
+            location_out = loc
+
     return {
         "id": str(doc["_id"]),
         "name": doc.get("name", ""),
         "email": doc.get("email", ""),
         "address": doc.get("address"),
-        "location": doc.get("location"),
+        "location": location_out,
     }
 
 
