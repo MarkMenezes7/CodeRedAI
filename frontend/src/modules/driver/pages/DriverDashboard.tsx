@@ -1365,7 +1365,7 @@ export function DriverDashboard() {
   );
 
   return (
-    <DriverLayout missionActive={missionActive} pickupCount={pendingDispatchOffers.length}>
+    <DriverLayout missionActive={missionActive} pickupCount={pendingDispatchOffers.length} onLogout={logoutDriverUser}>
       <main className="driver-console">
       <header className="driver-head">
         <div className="driver-head-copy">
@@ -1398,9 +1398,6 @@ export function DriverDashboard() {
           </label>
           <button type="button" className="btn btn-secondary" onClick={handleResetDemo}>
             Reset Demo
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={logoutDriverUser}>
-            Logout
           </button>
         </div>
       </header>

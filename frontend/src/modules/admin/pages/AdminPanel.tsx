@@ -1605,6 +1605,7 @@ export function AdminPanel() {
           }}
           adminEmail={adminSession.email}
           lastLoginLabel={formatDate(adminSession.lastLoginAt)}
+          onLogout={handleLogout}
         />
 
         <div className="admin-main-column">
@@ -1624,9 +1625,6 @@ export function AdminPanel() {
               <p>
                 {adminSession.name} • {adminSession.role}
               </p>
-              <button type="button" className="admin-btn" onClick={handleLogout}>
-                Logout
-              </button>
             </div>
           </section>
 

@@ -283,6 +283,16 @@
   min-width: 0;
 }
 
+.request-panel {
+  position: sticky;
+  top: 78px;
+  max-height: calc(100vh - 94px);
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.66);
+  backdrop-filter: blur(14px) saturate(1.22);
+  -webkit-backdrop-filter: blur(14px) saturate(1.22);
+}
+
 .panel-head { display: grid; gap: 4px; }
 .panel-head.compact { gap: 2px; }
 
@@ -319,12 +329,32 @@
 
 /* ─── Request filters ─────────────────────────────────────────────── */
 .request-filters {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 2px;
+}
+
+.request-filters-indicator {
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(226, 116, 116, 0.84);
+  background: linear-gradient(145deg, rgba(253, 210, 210, 0.86) 0%, rgba(242, 142, 142, 0.64) 100%);
+  box-shadow: 0 8px 20px rgba(136, 24, 24, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.82);
+  transition:
+    transform 420ms cubic-bezier(0.2, 0.9, 0.2, 1),
+    width 420ms cubic-bezier(0.2, 0.9, 0.2, 1),
+    opacity 180ms ease;
+  pointer-events: none;
 }
 
 .filter-chip {
+  position: relative;
+  z-index: 1;
   min-height: 28px;
   padding: 0 12px;
   border-radius: 999px;
@@ -341,9 +371,9 @@
 }
 .filter-chip:hover { color: var(--c-text); border-color: var(--c-border-hi); }
 .filter-chip.active {
-  border-color: rgba(255,59,59,0.4);
-  background: var(--c-red-dim);
-  color: var(--c-red);
+  border-color: transparent;
+  background: transparent;
+  color: #6f1d1d;
 }
 
 /* ─── Request list ────────────────────────────────────────────────── */
@@ -443,6 +473,19 @@
 }
 .request-actions .btn,
 .driver-actions .btn { min-height: 30px; font-size: 0.62rem; padding: 0 10px; }
+
+.request-sidebar-foot {
+  margin-top: auto;
+  padding-top: 2px;
+}
+
+.btn-sidebar-logout {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #d9a0a0;
+  background: rgba(255, 236, 236, 0.72);
+  color: #8f1f1f;
+}
 
 /* ─── Map panel ───────────────────────────────────────────────────── */
 .map-panel {
@@ -782,6 +825,11 @@
   .hospital-head-actions { width: 100%; justify-content: flex-start; }
   .hospital-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hospital-layout { grid-template-columns: 1fr; }
+  .request-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
   .request-list, .driver-list, .timeline-list { max-height: none; }
 }
 

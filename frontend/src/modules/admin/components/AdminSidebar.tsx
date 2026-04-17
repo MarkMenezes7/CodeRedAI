@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
   LayoutDashboard,
+  LogOut,
   Menu,
   MessageSquareWarning,
   Radio,
@@ -24,6 +25,7 @@ interface AdminSidebarProps {
   };
   adminEmail: string;
   lastLoginLabel: string;
+  onLogout: () => void;
 }
 
 type SidebarItemConfig = {
@@ -48,13 +50,15 @@ const MOBILE_BREAKPOINT_PX = 920;
 const DESKTOP_TOP_OFFSET_PX = 66;
 
 const sidebarBaseStyle: CSSProperties = {
-  background: '#ffffff',
+  background: 'rgba(255, 255, 255, 0.64)',
   color: '#20262e',
-  borderRight: '1px solid #c4cdd8',
+  borderRight: '1px solid rgba(196, 205, 216, 0.9)',
   flexShrink: 0,
   position: 'relative',
   transition: 'width 300ms ease, transform 300ms ease',
   overflow: 'visible',
+  backdropFilter: 'blur(14px) saturate(1.25)',
+  WebkitBackdropFilter: 'blur(14px) saturate(1.25)',
 };
 
 const baseItemStyle: CSSProperties = {
@@ -69,15 +73,16 @@ const baseItemStyle: CSSProperties = {
   border: 'none',
   width: '100%',
   position: 'relative',
+  zIndex: 1,
   cursor: 'pointer',
   transition: 'background-color 160ms ease, color 160ms ease, box-shadow 160ms ease',
 };
 
 const activeItemStyle: CSSProperties = {
   color: '#15181d',
-  background: 'rgba(215, 43, 43, 0.12)',
-  borderLeft: '3px solid #d72b2b',
-  boxShadow: 'inset 0 0 16px rgba(215, 43, 43, 0.1)',
+  background: 'transparent',
+  borderLeft: '3px solid transparent',
+  boxShadow: 'none',
 };
 
 const inactiveItemStyle: CSSProperties = {
@@ -100,6 +105,8 @@ function SidebarButton({
       type="button"
       title={collapsed ? label : undefined}
       onClick={onClick}
+      className={active ? 'admin-sidebar-item active' : 'admin-sidebar-item'}
+      data-active={active ? 'true' : 'false'}
       style={{
         ...baseItemStyle,
         ...(active ? activeItemStyle : inactiveItemStyle),
@@ -177,12 +184,34 @@ export function AdminSidebar({
   counts,
   adminEmail,
   lastLoginLabel,
+  onLogout,
 }: AdminSidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_BREAKPOINT_PX : false,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const navRef = useRef<HTMLElement | null>(null);
+  const [indicatorStyle, setIndicatorStyle] = useState({ top: 0, height: 0, visible: false });
+
+  const syncIndicator = useCallback(() => {
+    const navElement = navRef.current;
+    if (!navElement) {
+      return;
+    }
+
+    const activeItem = navElement.querySelector<HTMLElement>('.admin-sidebar-item.active');
+    if (!activeItem) {
+      setIndicatorStyle((current) => ({ ...current, visible: false }));
+      return;
+    }
+
+    setIndicatorStyle({
+      top: activeItem.offsetTop,
+      height: activeItem.offsetHeight,
+      visible: true,
+    });
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -204,6 +233,25 @@ export function AdminSidebar({
       window.removeEventListener('resize', onResize);
     };
   }, []);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncIndicator);
+    const onResize = () => syncIndicator();
+
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [syncIndicator]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncIndicator);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeSection, isCollapsed, isMobile, syncIndicator]);
 
   const sidebarItems = useMemo<SidebarItemConfig[]>(
     () => [
@@ -285,6 +333,13 @@ export function AdminSidebar({
     }
   };
 
+  const handleLogout = () => {
+    if (isMobile) {
+      setDrawerOpen(false);
+    }
+    onLogout();
+  };
+
   return (
     <>
       <style>{`@keyframes codered-sidebar-pulse { 0% { box-shadow: 0 0 0 0 rgba(215, 43, 43, 0.68); } 70% { box-shadow: 0 0 0 9px rgba(215, 43, 43, 0); } 100% { box-shadow: 0 0 0 0 rgba(215, 43, 43, 0); } }`}</style>
@@ -337,10 +392,10 @@ export function AdminSidebar({
         <div
           style={{
             padding: resolvedCollapsed ? '16px 0' : '16px 12px',
-            display: 'grid',
+            display: 'flex',
+            flexDirection: 'column',
             gap: '10px',
             height: '100%',
-            alignContent: 'start',
           }}
         >
           <div
@@ -380,7 +435,34 @@ export function AdminSidebar({
             ) : null}
           </div>
 
-          <nav style={{ display: 'grid', gap: '4px' }}>
+          <nav
+            ref={navRef}
+            style={{
+              display: 'grid',
+              gap: '4px',
+              position: 'relative',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                borderRadius: '10px',
+                border: '1px solid rgba(226, 116, 116, 0.84)',
+                background: 'linear-gradient(145deg, rgba(253, 210, 210, 0.86) 0%, rgba(242, 142, 142, 0.64) 100%)',
+                boxShadow: '0 8px 20px rgba(136, 24, 24, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.82)',
+                top: 0,
+                height: `${indicatorStyle.height}px`,
+                transform: `translateY(${indicatorStyle.top}px)`,
+                opacity: indicatorStyle.visible ? 1 : 0,
+                transition:
+                  'transform 460ms cubic-bezier(0.2, 0.9, 0.2, 1), height 460ms cubic-bezier(0.2, 0.9, 0.2, 1), opacity 240ms ease',
+                pointerEvents: 'none',
+                zIndex: 0,
+              }}
+            />
             {sidebarItems.map((item) => (
               <SidebarButton
                 key={item.section}
@@ -432,6 +514,31 @@ export function AdminSidebar({
               <span style={{ fontSize: '0.74rem', color: '#5f6f85' }}>Last login: {lastLoginLabel}</span>
             </div>
           ) : null}
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            title={resolvedCollapsed ? 'Logout' : undefined}
+            style={{
+              marginTop: 'auto',
+              minHeight: '44px',
+              borderRadius: '10px',
+              border: '1px solid #d9a0a0',
+              background: 'rgba(255, 236, 236, 0.72)',
+              color: '#8f1f1f',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: resolvedCollapsed ? 'center' : 'flex-start',
+              gap: '8px',
+              padding: resolvedCollapsed ? '0' : '0 12px',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <LogOut size={16} />
+            {!resolvedCollapsed ? 'Logout' : null}
+          </button>
         </div>
 
         {!isMobile ? (

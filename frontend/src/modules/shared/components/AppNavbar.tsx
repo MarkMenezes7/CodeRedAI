@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
 import './AppNavbar.css';
 
 interface AppNavbarProps {
@@ -19,6 +21,46 @@ const aliasMap: Record<string, string> = {
 
 export function AppNavbar({ currentPath }: AppNavbarProps) {
   const activePath = aliasMap[currentPath] ?? currentPath;
+  const linksRef = useRef<HTMLDivElement | null>(null);
+  const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0, visible: false });
+
+  const syncActiveIndicator = useCallback(() => {
+    const linksElement = linksRef.current;
+    if (!linksElement) {
+      return;
+    }
+
+    const activeLink = linksElement.querySelector<HTMLAnchorElement>('.app-navbar-link.active');
+    if (!activeLink) {
+      setIndicatorStyle((current) => ({ ...current, visible: false }));
+      return;
+    }
+
+    setIndicatorStyle({
+      left: activeLink.offsetLeft,
+      width: activeLink.offsetWidth,
+      visible: true,
+    });
+  }, []);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncActiveIndicator);
+    const onResize = () => syncActiveIndicator();
+
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [syncActiveIndicator]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncActiveIndicator);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activePath, syncActiveIndicator]);
 
   return (
     <header className="app-navbar-shell">
@@ -33,7 +75,16 @@ export function AppNavbar({ currentPath }: AppNavbarProps) {
           </span>
         </a>
 
-        <nav className="app-navbar-links" aria-label="Global navigation">
+        <nav className="app-navbar-links" aria-label="Global navigation" ref={linksRef}>
+          <span
+            className="app-navbar-indicator"
+            aria-hidden="true"
+            style={{
+              width: `${indicatorStyle.width}px`,
+              transform: `translateX(${indicatorStyle.left}px)`,
+              opacity: indicatorStyle.visible ? 1 : 0,
+            }}
+          />
           {navItems.map((item) => (
             <a
               key={item.path}
