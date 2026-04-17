@@ -590,6 +590,7 @@
   border-radius: 14px;
   border: 1px solid #e5e7eb;
   padding: 22px;
+  min-width: 0;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   animation: da-scaleIn 0.5s ease both;
   transition: box-shadow 0.3s ease;
@@ -638,6 +639,8 @@
 .da-chart-container {
   width: 100%;
   height: 280px;
+  min-width: 0;
+  min-height: 220px;
 }
 
 /* Pie specific */
@@ -653,6 +656,8 @@
   position: relative;
   width: 100%;
   height: 220px;
+  min-width: 0;
+  min-height: 220px;
 }
 
 .da-pie-center-label {

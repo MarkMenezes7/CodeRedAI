@@ -178,7 +178,7 @@ function loadOpsStateByKey(key: string): HospitalOpsState | null {
   return null;
 }
 
-function resolveLatestOpsStorageKey(preferredHospitalId?: string): string | null {
+function resolveLatestOpsStorageKey(preferredHospitalId?: string, preferredDriverId?: string): string | null {
   if (typeof window === 'undefined') {
     return null;
   }
@@ -195,19 +195,28 @@ function resolveLatestOpsStorageKey(preferredHospitalId?: string): string | null
     return null;
   }
 
-  let selectedKey = allKeys[0];
-  let selectedAt = 0;
+  const candidates = allKeys
+    .map((key) => {
+      const state = loadOpsStateByKey(key);
+      return {
+        key,
+        state,
+        tickAt: state ? Date.parse(state.lastSimulationAt) : 0,
+      };
+    })
+    .sort((left, right) => right.tickAt - left.tickAt);
 
-  for (const key of allKeys) {
-    const state = loadOpsStateByKey(key);
-    const tickAt = state ? Date.parse(state.lastSimulationAt) : 0;
-    if (tickAt >= selectedAt) {
-      selectedAt = tickAt;
-      selectedKey = key;
+  if (preferredDriverId) {
+    const keyForDriver = candidates.find((candidate) =>
+      candidate.state?.drivers.some((driver) => driver.id === preferredDriverId),
+    );
+
+    if (keyForDriver) {
+      return keyForDriver.key;
     }
   }
 
-  return selectedKey;
+  return candidates[0]?.key ?? null;
 }
 
 function toRadians(value: number) {
@@ -391,7 +400,6 @@ export function LiveMission() {
   const {
     isDriverAuthenticated,
     driverUser,
-    hospitalUser,
     logoutDriverUser,
   } = useHospitalAuth();
 
@@ -406,6 +414,7 @@ export function LiveMission() {
   const [missionStatusOverride, setMissionStatusOverride] = useState<'picked_up' | null>(null);
   const [nearestHospital, setNearestHospital] = useState<NearestHospital | null>(null);
   const [isResolvingNearestHospital, setIsResolvingNearestHospital] = useState(false);
+  const [isCompletingMission, setIsCompletingMission] = useState(false);
 
   const mapRef = useRef<MapRef | null>(null);
   const retryTimerRef = useRef<number | null>(null);
@@ -432,7 +441,10 @@ export function LiveMission() {
       return;
     }
 
-    const resolvedKey = resolveLatestOpsStorageKey(hospitalUser?.id ?? DEFAULT_HOSPITAL_ID);
+    const resolvedKey = resolveLatestOpsStorageKey(
+      driverUser?.linkedHospitalId ?? DEFAULT_HOSPITAL_ID,
+      driverUser?.id,
+    );
     if (!resolvedKey) {
       setOpsStorageKey(null);
       setOpsState(null);
@@ -454,7 +466,7 @@ export function LiveMission() {
         previousDriverId,
       }),
     );
-  }, [driverUser, hospitalUser?.id, isDriverAuthenticated]);
+  }, [driverUser, isDriverAuthenticated]);
 
   useEffect(() => {
     syncLinkedState();
@@ -787,11 +799,12 @@ export function LiveMission() {
     }
 
     if (missionStatus === 'picked_up') {
-      if (!nearestHospital) {
-        return null;
+      if (nearestHospital) {
+        return [nearestHospital.lng, nearestHospital.lat];
       }
 
-      return [nearestHospital.lng, nearestHospital.lat];
+      // Fallback so hospital leg starts immediately while nearest lookup resolves.
+      return [mission.hospitalLocation.lng, mission.hospitalLocation.lat];
     }
 
     return [mission.hospitalLocation.lng, mission.hospitalLocation.lat];
@@ -1105,8 +1118,37 @@ export function LiveMission() {
     return distanceMeters(effectiveDriverPosition, hospitalPosition);
   }, [effectiveDriverPosition, hospitalPosition]);
 
+  const pickupArrivalDetected = useMemo(() => {
+    if (pickupDistance <= ARRIVAL_METERS) {
+      return true;
+    }
+
+    if (routeData?.leg !== 'to_pickup' || !effectiveDriverPosition) {
+      return false;
+    }
+
+    const routeEnd = routeData.coordinates[routeData.coordinates.length - 1];
+    const nearRouteEnd = routeEnd ? distanceMeters(effectiveDriverPosition, routeEnd) <= ARRIVAL_METERS : false;
+    const arriveManeuverReached =
+      currentStep?.maneuver.type === 'arrive' && maneuverDistanceMeters <= ARRIVAL_METERS;
+
+    return nearRouteEnd || arriveManeuverReached || hasArrived;
+  }, [
+    currentStep?.maneuver.type,
+    effectiveDriverPosition,
+    hasArrived,
+    maneuverDistanceMeters,
+    pickupDistance,
+    routeData,
+  ]);
+
   const showMarkAsPickedButton =
-    missionStatus !== 'completed' && missionStatusOverride !== 'picked_up' && pickupDistance <= ARRIVAL_METERS;
+    missionStatus !== 'completed' && missionStatusOverride !== 'picked_up' && pickupArrivalDetected;
+
+  const showMarkAsCompletedButton =
+    missionStatus !== 'completed' &&
+    activeLeg === 'to_hospital' &&
+    (hospitalDistance <= ARRIVAL_METERS || hasArrived);
 
   useEffect(() => {
     if (!showMarkAsPickedButton || pickupArrivalAnnouncedRef.current) {
@@ -1135,6 +1177,8 @@ export function LiveMission() {
     announced200Ref.current.clear();
     announced50Ref.current.clear();
     straightAnnouncedRef.current.clear();
+    lastFetchRef.current = null;
+    setRetryNonce((value) => value + 1);
     setRouteError(null);
     setIsResolvingNearestHospital(true);
     speak('Patient on board. Finding nearest hospital.', true);
@@ -1170,8 +1214,7 @@ export function LiveMission() {
           return;
         }
 
-        setRouteError('Unable to fetch nearest hospital. Tap Mark as Picked to retry.');
-        setMissionStatusOverride(null);
+        setRouteError('Nearest hospital lookup unavailable. Continuing to assigned hospital route.');
       })
       .finally(() => {
         if (nearestHospitalLookupRef.current === controller) {
@@ -1182,15 +1225,106 @@ export function LiveMission() {
       });
   }, [effectiveDriverPosition, isResolvingNearestHospital, mission, setMissionStatus, speak, stopSimulation]);
 
+  const handleMarkAsCompleted = useCallback(() => {
+    if (!mission?.id || !opsStorageKey || !selectedDriverId || typeof window === 'undefined') {
+      return;
+    }
+
+    if (isCompletingMission) {
+      return;
+    }
+
+    setIsCompletingMission(true);
+
+    const latestState = loadOpsStateByKey(opsStorageKey);
+    if (!latestState) {
+      setIsCompletingMission(false);
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    let requestUpdated = false;
+    let driverUpdated = false;
+
+    const nextRequests = latestState.requests.map((request) => {
+      if (request.id !== mission.id) {
+        return request;
+      }
+
+      requestUpdated = true;
+      return {
+        ...request,
+        status: 'completed' as const,
+        closedAt: timestamp,
+        notes: `${request.notes ? `${request.notes} | ` : ''}Mission completed by driver.`,
+      };
+    });
+
+    const nextDrivers = latestState.drivers.map((driver) => {
+      if (driver.id !== selectedDriverId) {
+        return driver;
+      }
+
+      driverUpdated = true;
+      return {
+        ...driver,
+        status: 'available' as const,
+        occupied: false,
+        assignment: undefined,
+        etaMinutes: undefined,
+        location: effectiveDriverPosition
+          ? { lat: effectiveDriverPosition[1], lng: effectiveDriverPosition[0] }
+          : driver.location,
+        lastPingAt: timestamp,
+        secondsSincePing: 0,
+      };
+    });
+
+    if (!requestUpdated || !driverUpdated) {
+      setIsCompletingMission(false);
+      return;
+    }
+
+    const nextState: HospitalOpsState = {
+      ...latestState,
+      requests: nextRequests,
+      drivers: nextDrivers,
+      pendingDispatchOffers: Array.isArray(latestState.pendingDispatchOffers)
+        ? latestState.pendingDispatchOffers.filter((offer) => offer.requestId !== mission.id)
+        : [],
+      lastSimulationAt: timestamp,
+    };
+
+    stopSimulation();
+    setMissionStatusOverride(null);
+    setNearestHospital(null);
+    setRouteData(null);
+    setNavStepIndex(0);
+    setRouteError(null);
+    lastFetchRef.current = null;
+
+    window.localStorage.setItem(opsStorageKey, JSON.stringify(nextState));
+    setOpsState(nextState);
+    speak('Mission marked as completed. You are now available for new assignments.', true);
+    setIsCompletingMission(false);
+  }, [
+    effectiveDriverPosition,
+    isCompletingMission,
+    mission?.id,
+    opsStorageKey,
+    selectedDriverId,
+    speak,
+    stopSimulation,
+  ]);
+
   useEffect(() => {
     if (!mission) {
       return;
     }
 
     if (activeLeg === 'to_hospital' && hospitalDistance <= ARRIVAL_METERS && !hospitalArrivalAnnouncedRef.current) {
-      speak('Arrived at hospital. Mission complete.', true);
+      speak('Arrived at hospital. Please mark as completed.', true);
       hospitalArrivalAnnouncedRef.current = true;
-      missionCompleteAnnouncedRef.current = true;
       stopSimulation();
     }
   }, [activeLeg, hospitalDistance, mission, speak, stopSimulation]);
@@ -1677,6 +1811,32 @@ export function LiveMission() {
               }}
             >
               {isResolvingNearestHospital ? 'Finding nearest hospital...' : 'Mark as Picked'}
+            </button>
+          ) : null}
+
+          {showMarkAsCompletedButton ? (
+            <button
+              type="button"
+              onClick={handleMarkAsCompleted}
+              disabled={isCompletingMission}
+              style={{
+                position: 'absolute',
+                left: '50%',
+                bottom: '24px',
+                transform: 'translateX(-50%)',
+                zIndex: 50,
+                background: '#16a34a',
+                color: '#ffffff',
+                borderRadius: '12px',
+                padding: '12px 24px',
+                fontWeight: 700,
+                boxShadow: '0 12px 28px rgba(15, 23, 42, 0.3)',
+                border: 'none',
+                cursor: isCompletingMission ? 'wait' : 'pointer',
+                opacity: isCompletingMission ? 0.8 : 1,
+              }}
+            >
+              {isCompletingMission ? 'Completing mission...' : 'Mark as Completed'}
             </button>
           ) : null}
 

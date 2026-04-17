@@ -149,7 +149,7 @@ function loadOpsStateByKey(key: string): HospitalOpsState | null {
   return null;
 }
 
-function resolveLatestOpsStorageKey(preferredHospitalId?: string): string | null {
+function resolveLatestOpsStorageKey(preferredHospitalId?: string, preferredDriverId?: string): string | null {
   if (typeof window === 'undefined') {
     return null;
   }
@@ -166,19 +166,28 @@ function resolveLatestOpsStorageKey(preferredHospitalId?: string): string | null
     return null;
   }
 
-  let selectedKey = allKeys[0];
-  let selectedAt = 0;
+  const candidates = allKeys
+    .map((key) => {
+      const state = loadOpsStateByKey(key);
+      return {
+        key,
+        state,
+        tickAt: state ? Date.parse(state.lastSimulationAt) : 0,
+      };
+    })
+    .sort((left, right) => right.tickAt - left.tickAt);
 
-  for (const key of allKeys) {
-    const state = loadOpsStateByKey(key);
-    const tickAt = state ? Date.parse(state.lastSimulationAt) : 0;
-    if (tickAt >= selectedAt) {
-      selectedAt = tickAt;
-      selectedKey = key;
+  if (preferredDriverId) {
+    const keyForDriver = candidates.find((candidate) =>
+      candidate.state?.drivers.some((driver) => driver.id === preferredDriverId),
+    );
+
+    if (keyForDriver) {
+      return keyForDriver.key;
     }
   }
 
-  return selectedKey;
+  return candidates[0]?.key ?? null;
 }
 
 function formatClock(totalSeconds: number) {
@@ -344,7 +353,6 @@ function buildDefaultStops(
 export function DriverDashboard() {
   const {
     driverUser,
-    hospitalUser,
     isDriverAuthenticated,
     logoutDriverUser,
   } = useHospitalAuth();
@@ -366,7 +374,10 @@ export function DriverDashboard() {
       return;
     }
 
-    const resolvedKey = resolveLatestOpsStorageKey(hospitalUser?.id ?? DEFAULT_HOSPITAL_ID);
+    const resolvedKey = resolveLatestOpsStorageKey(
+      driverUser?.linkedHospitalId ?? DEFAULT_HOSPITAL_ID,
+      driverUser?.id,
+    );
 
     if (!resolvedKey) {
       setOpsStorageKey(null);
@@ -389,7 +400,7 @@ export function DriverDashboard() {
         previousDriverId,
       }),
     );
-  }, [driverUser, hospitalUser?.id, isDriverAuthenticated]);
+  }, [driverUser, isDriverAuthenticated]);
 
   useEffect(() => {
     syncLinkedState();
