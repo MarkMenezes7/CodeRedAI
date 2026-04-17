@@ -160,7 +160,7 @@ export function Sidebar({ missionActive, pickupCount: _pickupCount, onLogout }: 
         label: 'Dashboard',
         icon: LayoutDashboard,
         path: '/driver/dashboard',
-        aliases: ['/driver', '/driver-dashboard'],
+        aliases: ['/driver', '/driver-dashboard', '/driver/analytics'],
       },
       {
         label: 'Live Mission',
