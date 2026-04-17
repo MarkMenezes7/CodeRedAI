@@ -1,6 +1,8 @@
 .app-navbar-shell {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 40;
   width: 100%;
   background: #f7f7f8;
