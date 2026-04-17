@@ -56,7 +56,7 @@
   background: #ffffff;
   padding: 16px 12px;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   gap: 10px;
   z-index: 70;
   transform: translateX(0);
@@ -98,6 +98,28 @@
   display: grid;
   align-content: start;
   gap: 4px;
+}
+
+.hospital-sidebar-logout {
+  width: 100%;
+  margin-top: auto;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid #d9a0a0;
+  background: rgba(255, 236, 236, 0.72);
+  color: #8f1f1f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.hospital-sidebar-logout:hover {
+  background: rgba(255, 236, 236, 0.9);
 }
 
 .hospital-sidebar-item {
@@ -205,6 +227,7 @@
   .hospital-dashboard:not(.desktop-nav-open) .hospital-sidebar-label { display: none; }
   .hospital-dashboard:not(.desktop-nav-open) .hospital-sidebar-brand { justify-content: center; padding-inline: 0; }
   .hospital-dashboard:not(.desktop-nav-open) .hospital-sidebar-item { justify-content: center; padding: 0; border-radius: 10px; }
+  .hospital-dashboard:not(.desktop-nav-open) .hospital-sidebar-logout { justify-content: center; padding: 0; }
   .hospital-dashboard:not(.desktop-nav-open) .hospital-content { margin-left: var(--sidebar-collapsed-width); }
 }
 

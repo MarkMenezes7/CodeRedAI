@@ -2,7 +2,6 @@ import { useState, useCallback, useMemo } from 'react';
 import {
   Camera,
   KeyRound,
-  LogOut,
   Save,
   User,
   Wifi,
@@ -189,11 +188,6 @@ export function DriverSettings() {
     pushToast('Password updated successfully (demo).', 'success');
   }, [currentPassword, newPassword, confirmPassword, pushToast]);
 
-  const handleLogout = useCallback(() => {
-    if (!window.confirm('Logout from driver account?')) return;
-    logoutDriverUser();
-  }, [logoutDriverUser]);
-
   const pwStrength = useMemo(() => getPasswordStrength(newPassword), [newPassword]);
 
   const mapOptions: { value: MapStyleOption; label: string; emoji: string; bg: string }[] = [
@@ -218,7 +212,7 @@ export function DriverSettings() {
     <DriverLayout
       missionActive={DRIVER_MISSIONS.some((m) => m.status === 'Ongoing')}
       pickupCount={0}
-      onLogout={handleLogout}
+      onLogout={logoutDriverUser}
     >
       <div className="driver-settings-page">
         <div style={{ display: 'grid', gap: '6px' }}>
@@ -580,7 +574,7 @@ export function DriverSettings() {
             </div>
             <div>
               <h2 className="section-title">Account & Security</h2>
-              <p className="section-subtitle">Password, sessions, and logout</p>
+              <p className="section-subtitle">Password and session controls</p>
             </div>
           </div>
 
@@ -610,13 +604,6 @@ export function DriverSettings() {
               onClick={() => setShowPasswordModal(true)}
             >
               <KeyRound size={15} /> Change Password
-            </button>
-            <button
-              type="button"
-              className="btn-danger-outline"
-              onClick={handleLogout}
-            >
-              <LogOut size={15} /> Logout
             </button>
           </div>
         </section>

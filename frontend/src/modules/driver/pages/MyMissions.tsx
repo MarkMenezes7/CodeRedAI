@@ -561,11 +561,7 @@ export function MyMissions() {
     <DriverLayout
       missionActive={allMissions.some((m) => m.status === 'Ongoing')}
       pickupCount={0}
-      onLogout={() => {
-        if (window.confirm('Logout from driver account?')) {
-          logoutDriverUser();
-        }
-      }}
+      onLogout={logoutDriverUser}
     >
       <div className="mm-page">
 

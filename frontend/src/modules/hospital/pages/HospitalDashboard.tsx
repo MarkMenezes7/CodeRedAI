@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
+  LogOut,
   Menu,
   Radio,
   ShieldCheck,
@@ -652,6 +653,13 @@ export function HospitalDashboard() {
     setIsDesktopNavOpen((prev) => !prev);
   };
 
+  const handleSidebarLogout = () => {
+    if (isMobileViewport()) {
+      setIsMobileNavOpen(false);
+    }
+    logoutHospitalUser();
+  };
+
   // Close mobile nav on viewport resize to desktop
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -703,6 +711,16 @@ export function HospitalDashboard() {
             </button>
           ))}
         </nav>
+
+        <button
+          type="button"
+          className="hospital-sidebar-logout"
+          onClick={handleSidebarLogout}
+          title={!isMobileViewport() && !isDesktopNavOpen ? 'Logout' : undefined}
+        >
+          <LogOut size={16} />
+          {isMobileViewport() || isDesktopNavOpen ? 'Logout' : null}
+        </button>
 
 
 
@@ -765,7 +783,6 @@ export function HospitalDashboard() {
               <div className="hospital-head-buttons">
                 <button type="button" className="btn btn-secondary" onClick={handleSimulateIncoming}>+ Simulate Request</button>
                 <button type="button" className="btn btn-ghost" onClick={handleResetDemo}>Reset Demo</button>
-                <button type="button" className="btn btn-ghost" onClick={logoutHospitalUser}>Logout</button>
               </div>
             </div>
           </header>

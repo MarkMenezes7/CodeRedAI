@@ -327,6 +327,7 @@ export function LiveMission() {
     isDriverAuthenticated,
     driverUser,
     hospitalUser,
+    logoutDriverUser,
   } = useHospitalAuth();
 
   const [opsStorageKey, setOpsStorageKey] = useState<string | null>(null);
@@ -1013,7 +1014,7 @@ export function LiveMission() {
 
   if (!hasMission) {
     return (
-      <DriverLayout missionActive={false} pickupCount={pickupCount}>
+      <DriverLayout missionActive={false} pickupCount={pickupCount} onLogout={logoutDriverUser}>
         <main style={{ padding: '20px' }}>{emptyState('No active mission assigned')}</main>
       </DriverLayout>
     );
@@ -1021,7 +1022,7 @@ export function LiveMission() {
 
   if (!coordinatesReady) {
     return (
-      <DriverLayout missionActive={missionActive} pickupCount={pickupCount}>
+      <DriverLayout missionActive={missionActive} pickupCount={pickupCount} onLogout={logoutDriverUser}>
         <main style={{ padding: '20px' }}>{emptyState('Waiting for dispatch coordinates...')}</main>
       </DriverLayout>
     );
@@ -1029,7 +1030,7 @@ export function LiveMission() {
 
   if (!MAPBOX_TOKEN) {
     return (
-      <DriverLayout missionActive={missionActive} pickupCount={pickupCount}>
+      <DriverLayout missionActive={missionActive} pickupCount={pickupCount} onLogout={logoutDriverUser}>
         <main style={{ padding: '20px' }}>
           {emptyState('Mapbox token missing. Set VITE_MAPBOX_ACCESS_TOKEN to enable live mission navigation.')}
         </main>
@@ -1038,7 +1039,7 @@ export function LiveMission() {
   }
 
   return (
-    <DriverLayout missionActive={missionActive} pickupCount={pickupCount}>
+    <DriverLayout missionActive={missionActive} pickupCount={pickupCount} onLogout={logoutDriverUser}>
       <main style={{ padding: '16px', display: 'grid', gap: '12px' }}>
         <style>
           {`
