@@ -39,6 +39,33 @@ SEVERITY_MAP: dict[str, str] = {
 VALID_EMERGENCY_TYPES = frozenset(SEVERITY_MAP.keys())
 
 # ---------------------------------------------------------------------------
+# Emergency State Machine
+# ---------------------------------------------------------------------------
+#
+# REQUESTED → DRIVER_NOTIFIED → DRIVER_ASSIGNED → EN_ROUTE_PATIENT
+#   → PATIENT_PICKED → HOSPITAL_NOTIFIED → HOSPITAL_ASSIGNED
+#   → EN_ROUTE_HOSPITAL → COMPLETED
+#
+# Parallel branch: Hospital notification happens simultaneously with driver
+# notification, so HOSPITAL_NOTIFIED can co-exist with DRIVER_NOTIFIED.
+# The "status" field tracks the overall lifecycle position.
+# ---------------------------------------------------------------------------
+
+EMERGENCY_STATES = [
+    "REQUESTED",
+    "DRIVER_NOTIFIED",
+    "DRIVER_ASSIGNED",
+    "EN_ROUTE_PATIENT",
+    "PATIENT_PICKED",
+    "HOSPITAL_NOTIFIED",
+    "HOSPITAL_ASSIGNED",
+    "EN_ROUTE_HOSPITAL",
+    "COMPLETED",
+    "CANCELLED",
+    "NO_RESOURCES",
+]
+
+# ---------------------------------------------------------------------------
 # Ambulance driver simulation pool
 # ---------------------------------------------------------------------------
 
@@ -93,14 +120,23 @@ def create_emergency(
         },
         "emergency_type": emergency_type,
         "severity": severity,
-        "status": "pending",
+        "status": "REQUESTED",
+        # Hospital coordination
         "assigned_hospital": None,
         "hospital_status": "pending",
         "notified_hospitals": [],      # list of hospital_id strings
         "rejected_hospitals": [],      # hospitals that explicitly rejected
+        # Driver coordination
+        "assigned_driver_id": None,
+        "driver_status": "pending",
+        "driver_offers": [],           # list of dispatch offer dicts
+        "driver_assigned_at": None,
+        # Ambulance (populated after driver accepts)
         "ambulance": None,
+        # Timestamps
         "created_at": datetime.now(tz=timezone.utc),
         "updated_at": datetime.now(tz=timezone.utc),
+        "completed_at": None,
     }
 
     _logger.info(
@@ -169,3 +205,43 @@ def dispatch_ambulance(emergency_id: str) -> dict[str, Any] | None:
     except PyMongoError as exc:
         _logger.error("[DISPATCH ERROR] %s", exc)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Emergency status query
+# ---------------------------------------------------------------------------
+
+def get_emergency_status(emergency_id: str) -> dict[str, Any] | None:
+    """
+    Retrieve the full status of an emergency for any party to poll.
+
+    Returns a serialized dict with all relevant fields, or None if not found.
+    """
+    try:
+        doc = get_emergencies_collection().find_one({"_id": ObjectId(emergency_id)})
+    except PyMongoError as exc:
+        _logger.error("[STATUS QUERY ERROR] %s", exc)
+        return None
+
+    if not doc:
+        return None
+
+    loc = doc.get("location", {})
+    return {
+        "emergency_id": str(doc["_id"]),
+        "status": doc.get("status", ""),
+        "severity": doc.get("severity", ""),
+        "emergency_type": doc.get("emergency_type", ""),
+        "patient_address": loc.get("address", ""),
+        "patient_lat": loc.get("lat"),
+        "patient_lng": loc.get("lng"),
+        "assigned_driver_id": doc.get("assigned_driver_id"),
+        "assigned_hospital_id": doc.get("assigned_hospital"),
+        "hospital_status": doc.get("hospital_status"),
+        "driver_status": doc.get("driver_status"),
+        "ambulance": doc.get("ambulance"),
+        "created_at": str(doc["created_at"]) if doc.get("created_at") else None,
+        "updated_at": str(doc["updated_at"]) if doc.get("updated_at") else None,
+        "completed_at": str(doc["completed_at"]) if doc.get("completed_at") else None,
+    }
+

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Crosshair, Maximize2, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Crosshair, Maximize2, Pause, PhoneCall, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import Map, {
   Layer,
   Marker,
@@ -11,6 +11,7 @@ import Map, {
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 import { NavigationPanel } from '@/components/driver/NavigationPanel';
+import { useDriverDispatch } from '@/hooks/useDriverDispatch';
 import { useDriverSimulation } from '@/hooks/useDriverSimulation';
 import { useVoiceNavigation } from '@/hooks/useVoiceNavigation';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
@@ -396,12 +397,44 @@ function emptyState(message: string) {
   );
 }
 
+function mapBackendStatusToMissionStatus(status: string | undefined): MissionStatusValue | null {
+  if (!status) {
+    return null;
+  }
+
+  if (status === 'COMPLETED') {
+    return 'completed';
+  }
+
+  if (
+    status === 'PATIENT_PICKED' ||
+    status === 'HOSPITAL_ASSIGNED' ||
+    status === 'EN_ROUTE_HOSPITAL'
+  ) {
+    return 'picked_up';
+  }
+
+  if (status === 'DRIVER_ASSIGNED' || status === 'EN_ROUTE_PATIENT') {
+    return 'to_patient';
+  }
+
+  return null;
+}
+
 export function LiveMission() {
   const {
     isDriverAuthenticated,
     driverUser,
     logoutDriverUser,
   } = useHospitalAuth();
+  const driverDispatchId = driverUser?.email;
+  const {
+    pendingOffers: apiPendingOffers,
+    activeMission: apiActiveMission,
+    acceptOffer,
+    rejectOffer,
+    updateStatus,
+  } = useDriverDispatch(driverDispatchId);
 
   const [opsStorageKey, setOpsStorageKey] = useState<string | null>(null);
   const [opsState, setOpsState] = useState<HospitalOpsState | null>(null);
@@ -415,6 +448,7 @@ export function LiveMission() {
   const [nearestHospital, setNearestHospital] = useState<NearestHospital | null>(null);
   const [isResolvingNearestHospital, setIsResolvingNearestHospital] = useState(false);
   const [isCompletingMission, setIsCompletingMission] = useState(false);
+  const [preferApiDispatchMode, setPreferApiDispatchMode] = useState(false);
 
   const mapRef = useRef<MapRef | null>(null);
   const retryTimerRef = useRef<number | null>(null);
@@ -545,7 +579,7 @@ export function LiveMission() {
     );
   }, [opsState, selectedDriver]);
 
-  const mission = useMemo<MissionCoordinates | null>(() => {
+  const localMission = useMemo<MissionCoordinates | null>(() => {
     if (!selectedDriver || !activeRequest || !opsState) {
       return null;
     }
@@ -573,6 +607,64 @@ export function LiveMission() {
     };
   }, [activeRequest, opsState, selectedDriver]);
 
+  const apiMission = useMemo<MissionCoordinates | null>(() => {
+    if (!apiActiveMission) {
+      return null;
+    }
+
+    const pickupLat = apiActiveMission.patient_lat;
+    const pickupLng = apiActiveMission.patient_lng;
+    const hospitalLat = apiActiveMission.hospital_lat;
+    const hospitalLng = apiActiveMission.hospital_lng;
+
+    if (!isFiniteCoordinate(pickupLat) || !isFiniteCoordinate(pickupLng)) {
+      return null;
+    }
+
+    const resolvedHospitalLat = isFiniteCoordinate(hospitalLat) ? hospitalLat : pickupLat;
+    const resolvedHospitalLng = isFiniteCoordinate(hospitalLng) ? hospitalLng : pickupLng;
+
+    return {
+      id: apiActiveMission.emergency_id,
+      patientId: apiActiveMission.emergency_id,
+      patientAge: 0,
+      complaint: `${apiActiveMission.emergency_type || 'Emergency'} (${apiActiveMission.severity || 'unknown'})`,
+      driverLocation: {
+        lat: pickupLat - 0.01,
+        lng: pickupLng - 0.01,
+      },
+      pickupLocation: {
+        lat: pickupLat,
+        lng: pickupLng,
+        address: apiActiveMission.patient_address || 'Pickup location',
+      },
+      hospitalLocation: {
+        lat: resolvedHospitalLat,
+        lng: resolvedHospitalLng,
+        address: apiActiveMission.assigned_hospital_name || 'Assigned hospital',
+        name: apiActiveMission.assigned_hospital_name || 'Hospital',
+      },
+    };
+  }, [apiActiveMission]);
+
+  const hasApiOffers = apiPendingOffers.length > 0;
+
+  useEffect(() => {
+    // Lock to backend-dispatch mode for this session once API context appears.
+    if (apiActiveMission || hasApiOffers) {
+      setPreferApiDispatchMode(true);
+    }
+  }, [apiActiveMission, hasApiOffers]);
+
+  useEffect(() => {
+    // Reset mode when driver identity changes or logs out.
+    setPreferApiDispatchMode(false);
+  }, [driverDispatchId]);
+
+  const apiDispatchHasPriority = preferApiDispatchMode || Boolean(apiActiveMission) || hasApiOffers;
+  const mission = apiDispatchHasPriority ? apiMission : (localMission ?? apiMission);
+  const usingApiMission = Boolean(apiDispatchHasPriority && apiMission);
+
   const missionDriverPickupDistance = useMemo(() => {
     if (!mission) {
       return Number.POSITIVE_INFINITY;
@@ -585,20 +677,24 @@ export function LiveMission() {
   }, [mission]);
 
   const missionStatus = useMemo<MissionStatusValue | null>(() => {
-    if (!selectedDriver || !activeRequest) {
-      return null;
-    }
-
-    if (activeRequest.status === 'completed') {
-      return activeRequest.status;
-    }
-
     if (missionStatusOverride === 'picked_up') {
       return 'picked_up';
     }
 
-    return selectedDriver.status;
-  }, [activeRequest, missionStatusOverride, selectedDriver]);
+    if (apiDispatchHasPriority) {
+      return mapBackendStatusToMissionStatus(apiActiveMission?.status);
+    }
+
+    if (selectedDriver && activeRequest) {
+      if (activeRequest.status === 'completed') {
+        return activeRequest.status;
+      }
+
+      return selectedDriver.status;
+    }
+
+    return null;
+  }, [activeRequest, apiActiveMission?.status, apiDispatchHasPriority, missionStatusOverride, selectedDriver]);
 
   const shouldConfirmPickup =
     missionStatusOverride !== 'picked_up' && missionDriverPickupDistance <= ARRIVAL_METERS;
@@ -679,7 +775,7 @@ export function LiveMission() {
     [opsStorageKey, selectedDriver],
   );
 
-  const pickupCount = useMemo(() => {
+  const localPickupCount = useMemo(() => {
     const offers = opsState?.pendingDispatchOffers ?? [];
 
     if (!selectedDriver?.id) {
@@ -689,7 +785,9 @@ export function LiveMission() {
     return offers.filter((offer) => offer.offeredDriverId === selectedDriver.id).length;
   }, [opsState?.pendingDispatchOffers, selectedDriver?.id]);
 
-  const hasMission = Boolean(mission && selectedDriver && activeRequest);
+  const pickupCount = Math.max(localPickupCount, apiPendingOffers.length);
+
+  const hasMission = Boolean(mission || apiActiveMission);
 
   const coordinatesReady = Boolean(
     mission &&
@@ -707,24 +805,37 @@ export function LiveMission() {
 
   const pingDriverLocation = useCallback(
     ({ lng, lat }: { lng: number; lat: number }) => {
-      if (!mission?.id) {
-        return;
-      }
-
       const timestamp = new Date().toISOString();
 
-      void fetch('/api/driver/update-location', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          missionId: mission.id,
-          lat,
-          lng,
-          timestamp,
-        }),
-      }).catch(() => {
-        // Retry silently on next simulation cycle.
-      });
+      if (localMission?.id) {
+        void fetch('/api/driver/update-location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            missionId: localMission.id,
+            lat,
+            lng,
+            timestamp,
+          }),
+        }).catch(() => {
+          // Retry silently on next simulation cycle.
+        });
+      }
+
+      if (driverDispatchId) {
+        void fetch('/api/driver/location', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            driver_id: driverDispatchId,
+            lat,
+            lng,
+            speed_kmph: 30,
+          }),
+        }).catch(() => {
+          // Keep polling/simulation running even if one ping fails.
+        });
+      }
 
       if (!opsStorageKey || !selectedDriverId || typeof window === 'undefined') {
         return;
@@ -764,7 +875,7 @@ export function LiveMission() {
       window.localStorage.setItem(opsStorageKey, JSON.stringify(nextState));
       setOpsState(nextState);
     },
-    [mission?.id, opsStorageKey, selectedDriverId],
+    [driverDispatchId, localMission?.id, opsStorageKey, selectedDriverId],
   );
 
   const {
@@ -1145,10 +1256,12 @@ export function LiveMission() {
   const showMarkAsPickedButton =
     missionStatus !== 'completed' && missionStatusOverride !== 'picked_up' && pickupArrivalDetected;
 
+  const reachedHospital = hospitalDistance <= ARRIVAL_METERS || hasArrived;
+
   const showMarkAsCompletedButton =
     missionStatus !== 'completed' &&
-    activeLeg === 'to_hospital' &&
-    (hospitalDistance <= ARRIVAL_METERS || hasArrived);
+    reachedHospital &&
+    (activeLeg === 'to_hospital' || usingApiMission);
 
   useEffect(() => {
     if (!showMarkAsPickedButton || pickupArrivalAnnouncedRef.current) {
@@ -1182,6 +1295,40 @@ export function LiveMission() {
     setRouteError(null);
     setIsResolvingNearestHospital(true);
     speak('Patient on board. Finding nearest hospital.', true);
+
+    if (usingApiMission && apiActiveMission?.emergency_id) {
+      const lat = effectiveDriverPosition[1];
+      const lng = effectiveDriverPosition[0];
+
+      void (async () => {
+        if (apiActiveMission.status === 'DRIVER_ASSIGNED') {
+          const enRoute = await updateStatus(
+            apiActiveMission.emergency_id,
+            'EN_ROUTE_PATIENT',
+            lat,
+            lng,
+          );
+
+          if (!enRoute.success) {
+            setMissionStatusOverride(null);
+            setRouteError(enRoute.message || 'Unable to start patient route.');
+            return;
+          }
+        }
+
+        const picked = await updateStatus(
+          apiActiveMission.emergency_id,
+          'PATIENT_PICKED',
+          lat,
+          lng,
+        );
+
+        if (!picked.success) {
+          setMissionStatusOverride(null);
+          setRouteError(picked.message || 'Unable to mark patient as picked.');
+        }
+      })();
+    }
 
     if (retryTimerRef.current !== null) {
       window.clearTimeout(retryTimerRef.current);
@@ -1223,18 +1370,69 @@ export function LiveMission() {
 
         setIsResolvingNearestHospital(false);
       });
-  }, [effectiveDriverPosition, isResolvingNearestHospital, mission, setMissionStatus, speak, stopSimulation]);
+  }, [
+    apiActiveMission?.emergency_id,
+    apiActiveMission?.status,
+    effectiveDriverPosition,
+    isResolvingNearestHospital,
+    mission,
+    setMissionStatus,
+    speak,
+    stopSimulation,
+    updateStatus,
+    usingApiMission,
+  ]);
 
   const handleMarkAsCompleted = useCallback(() => {
-    if (!mission?.id || !opsStorageKey || !selectedDriverId || typeof window === 'undefined') {
-      return;
-    }
-
     if (isCompletingMission) {
       return;
     }
 
     setIsCompletingMission(true);
+
+    if (usingApiMission && apiActiveMission?.emergency_id) {
+      const lat = effectiveDriverPosition ? effectiveDriverPosition[1] : undefined;
+      const lng = effectiveDriverPosition ? effectiveDriverPosition[0] : undefined;
+
+      stopSimulation();
+      setRouteError(null);
+      void (async () => {
+        const transitionPlanByStatus: Record<string, string[]> = {
+          DRIVER_ASSIGNED: ['EN_ROUTE_PATIENT', 'PATIENT_PICKED', 'EN_ROUTE_HOSPITAL', 'COMPLETED'],
+          EN_ROUTE_PATIENT: ['PATIENT_PICKED', 'EN_ROUTE_HOSPITAL', 'COMPLETED'],
+          PATIENT_PICKED: ['EN_ROUTE_HOSPITAL', 'COMPLETED'],
+          HOSPITAL_ASSIGNED: ['EN_ROUTE_HOSPITAL', 'COMPLETED'],
+          EN_ROUTE_HOSPITAL: ['COMPLETED'],
+          COMPLETED: [],
+        };
+
+        const transitionPlan = transitionPlanByStatus[apiActiveMission.status] ?? ['COMPLETED'];
+
+        for (const nextStatus of transitionPlan) {
+          const stepResult = await updateStatus(apiActiveMission.emergency_id, nextStatus, lat, lng);
+          if (!stepResult.success) {
+            setRouteError(stepResult.message || `Unable to transition mission to ${nextStatus}.`);
+            setIsCompletingMission(false);
+            return;
+          }
+        }
+
+        setMissionStatusOverride(null);
+        setNearestHospital(null);
+        setRouteData(null);
+        setNavStepIndex(0);
+        lastFetchRef.current = null;
+        speak('Mission marked as completed. You are now available for new assignments.', true);
+        setIsCompletingMission(false);
+      })();
+
+      return;
+    }
+
+    if (!mission?.id || !opsStorageKey || !selectedDriverId || typeof window === 'undefined') {
+      setIsCompletingMission(false);
+      return;
+    }
 
     const latestState = loadOpsStateByKey(opsStorageKey);
     if (!latestState) {
@@ -1308,6 +1506,8 @@ export function LiveMission() {
     speak('Mission marked as completed. You are now available for new assignments.', true);
     setIsCompletingMission(false);
   }, [
+    apiActiveMission?.emergency_id,
+    apiActiveMission?.status,
     effectiveDriverPosition,
     isCompletingMission,
     mission?.id,
@@ -1315,6 +1515,8 @@ export function LiveMission() {
     selectedDriverId,
     speak,
     stopSimulation,
+    updateStatus,
+    usingApiMission,
   ]);
 
   useEffect(() => {
@@ -1385,7 +1587,7 @@ export function LiveMission() {
 
   const simulationBannerText = routeData
     ? isSimulating
-      ? '🚑 Simulation running - movement every 1s, ping every 5s'
+      ? 'Simulation running - movement every 1s, ping every 5s'
       : 'Simulation paused'
     : null;
 
@@ -1409,6 +1611,8 @@ export function LiveMission() {
     speak('SOS activated. Emergency services alerted.', true);
   }, [speak]);
 
+  const showDispatchOffers = apiPendingOffers.length > 0 && !apiActiveMission;
+
   if (!isDriverAuthenticated || !driverUser) {
     return <DriverAuthPage />;
   }
@@ -1416,7 +1620,100 @@ export function LiveMission() {
   if (!hasMission) {
     return (
       <DriverLayout missionActive={false} pickupCount={pickupCount} onLogout={logoutDriverUser}>
-        <main style={{ padding: '20px' }}>{emptyState('No active mission assigned')}</main>
+        <main style={{ padding: '20px', display: 'grid', gap: '12px' }}>
+          {showDispatchOffers ? (
+            <section
+              style={{
+                border: '1px solid #fecaca',
+                background: '#fff1f2',
+                borderRadius: '14px',
+                padding: '16px',
+                display: 'grid',
+                gap: '12px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '999px',
+                    background: '#fee2e2',
+                    color: '#b91c1c',
+                    display: 'grid',
+                    placeItems: 'center',
+                  }}
+                >
+                  <PhoneCall size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '16px', color: '#7f1d1d' }}>Incoming dispatch offers</h3>
+                  <p style={{ margin: '2px 0 0', fontSize: '13px', color: '#991b1b' }}>
+                    Review and accept or reject assignments.
+                  </p>
+                </div>
+              </div>
+
+              {apiPendingOffers.map((offer) => (
+                <article
+                  key={offer.offer_id}
+                  style={{
+                    border: '1px solid #fecaca',
+                    background: '#ffffff',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    display: 'grid',
+                    gap: '4px',
+                  }}
+                >
+                  <p style={{ margin: 0, fontWeight: 700, color: '#7f1d1d' }}>
+                    {offer.emergency_type.toUpperCase().replace('_', ' ')} - {offer.severity.toUpperCase()}
+                  </p>
+                  <p style={{ margin: 0, color: '#7f1d1d', fontSize: '13px' }}>{offer.patient_address}</p>
+                  <p style={{ margin: 0, color: '#7f1d1d', fontSize: '13px' }}>{offer.patient_phone}</p>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void acceptOffer(offer.emergency_id, offer.offer_id);
+                      }}
+                      style={{
+                        border: 'none',
+                        borderRadius: '10px',
+                        background: '#16a34a',
+                        color: '#ffffff',
+                        padding: '8px 12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Accept
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void rejectOffer(offer.emergency_id, offer.offer_id);
+                      }}
+                      style={{
+                        border: 'none',
+                        borderRadius: '10px',
+                        background: '#334155',
+                        color: '#ffffff',
+                        padding: '8px 12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </section>
+          ) : null}
+
+          {emptyState(showDispatchOffers ? 'Pending offers available.' : 'No active mission assigned')}
+        </main>
       </DriverLayout>
     );
   }
@@ -1472,7 +1769,7 @@ export function LiveMission() {
               {mission?.id ?? 'Mission'}
             </h1>
             <p style={{ margin: '4px 0 0', color: '#475569', fontSize: '14px' }}>
-              Status: {missionStatus ?? 'waiting'} • Storage: {opsStorageKey ? 'linked' : 'waiting'}
+              Status: {missionStatus ?? 'waiting'} - Source: {usingApiMission ? 'backend dispatch' : opsStorageKey ? 'linked storage' : 'waiting'}
             </p>
           </div>
 
@@ -1488,7 +1785,7 @@ export function LiveMission() {
                 padding: '6px 10px',
               }}
             >
-              🚑 Demo Mode (Fast Simulation Enabled)
+              Demo Mode (Fast Simulation Enabled)
             </span>
 
             {simulationBannerText ? (
@@ -1596,7 +1893,7 @@ export function LiveMission() {
                     background: '#f97316',
                     boxShadow: '0 8px 16px rgba(15, 23, 42, 0.22)',
                   }}
-                  title={`${mission?.patientId ?? 'Patient'} • ${mission?.patientAge ?? 0}Y • ${mission?.complaint ?? ''}`}
+                  title={`${mission?.patientId ?? 'Patient'} - ${mission?.patientAge ?? 0}Y - ${mission?.complaint ?? ''}`}
                 />
               </Marker>
             ) : null}
@@ -1616,7 +1913,7 @@ export function LiveMission() {
                     placeItems: 'center',
                     boxShadow: '0 8px 16px rgba(15, 23, 42, 0.22)',
                   }}
-                  title={`${nearestHospital?.name ?? mission?.hospitalLocation.name ?? 'Hospital'} • ${nearestHospital?.address ?? mission?.hospitalLocation.address ?? ''}`}
+                  title={`${nearestHospital?.name ?? mission?.hospitalLocation.name ?? 'Hospital'} - ${nearestHospital?.address ?? mission?.hospitalLocation.address ?? ''}`}
                 >
                   +
                 </div>
@@ -1924,15 +2221,15 @@ export function LiveMission() {
           }}
         >
           <p style={{ margin: 0 }}>
-            Driver: {selectedDriver?.callSign} • Mission status: {missionStatus ?? 'waiting'}
+            Driver: {selectedDriver?.callSign ?? driverDispatchId ?? 'driver'} - Mission status: {missionStatus ?? 'waiting'}
           </p>
           <p style={{ margin: 0 }}>
-            Destination: {destinationName} • ETA: {Math.max(0, Math.round((routeData?.etaSeconds ?? 0) / 60))} min •
+            Destination: {destinationName} - ETA: {Math.max(0, Math.round((routeData?.etaSeconds ?? 0) / 60))} min -
             Remaining: {((routeData?.remainingDistanceMeters ?? 0) / 1000).toFixed(1)} km
           </p>
           <p style={{ margin: 0 }}>
-            Navigation index: {Math.max(currentIndex, boundedStepIndex)} • Distance to next turn:{' '}
-            {Math.round(maneuverDistanceMeters)} m • {isMoving ? 'Moving' : 'Idle'}
+            Navigation index: {Math.max(currentIndex, boundedStepIndex)} - Distance to next turn:{' '}
+            {Math.round(maneuverDistanceMeters)} m - {isMoving ? 'Moving' : 'Idle'}
           </p>
         </section>
       </main>

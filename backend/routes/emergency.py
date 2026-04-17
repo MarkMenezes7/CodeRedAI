@@ -40,6 +40,10 @@ try:
         notify_hospitals,
         reject_emergency,
     )
+    from ..services.driver_service import (
+        find_nearest_drivers,
+        create_driver_offers,
+    )
 except ImportError:
     from schemas.emergency import (
         AcceptEmergencyRequest,
@@ -64,6 +68,10 @@ except ImportError:
         get_pending_emergencies,
         notify_hospitals,
         reject_emergency,
+    )
+    from services.driver_service import (
+        find_nearest_drivers,
+        create_driver_offers,
     )
 
 _logger = logging.getLogger(__name__)
@@ -111,11 +119,31 @@ async def create_emergency_endpoint(payload: CreateEmergencyRequest):
             detail="Could not persist emergency to database. Check MongoDB connectivity.",
         )
 
-    # Step 2: geo-search nearest hospitals
+    # Step 2: geo-search nearest hospitals (parallel branch 1)
     hospitals = find_nearest_hospitals(payload.lat, payload.lng)
 
     # Step 3: notify matched hospitals (updates MongoDB + logs)
     notify_hospitals(emergency_id, hospitals)
+
+    # Step 4: geo-search nearest drivers (parallel branch 2)
+    drivers = find_nearest_drivers(payload.lat, payload.lng)
+
+    # Step 5: create dispatch offers for drivers
+    driver_offers = create_driver_offers(emergency_id, drivers)
+
+    # Update emergency status to reflect notifications sent
+    if hospitals or drivers:
+        from datetime import datetime, timezone
+        from bson import ObjectId
+        new_status = "DRIVER_NOTIFIED" if drivers else "HOSPITAL_NOTIFIED"
+        try:
+            from database import get_emergencies_collection
+            get_emergencies_collection().update_one(
+                {"_id": ObjectId(emergency_id)},
+                {"$set": {"status": new_status, "updated_at": datetime.now(tz=timezone.utc)}},
+            )
+        except Exception:
+            pass  # Non-critical status update
 
     notified = [
         NotifiedHospitalInfo(
@@ -127,9 +155,9 @@ async def create_emergency_endpoint(payload: CreateEmergencyRequest):
     ]
 
     msg = (
-        f"Emergency created. {len(hospitals)} hospital(s) notified within 5 km."
-        if hospitals
-        else "Emergency created. No active hospitals found within 5 km — try again shortly."
+        f"Emergency created. {len(hospitals)} hospital(s) and {len(drivers)} driver(s) notified within 5 km."
+        if hospitals or drivers
+        else "Emergency created. No active hospitals or drivers found within 5 km — try again shortly."
     )
 
     return CreateEmergencyResponse(
