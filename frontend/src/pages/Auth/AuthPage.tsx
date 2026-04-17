@@ -1,11 +1,16 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import Map, { Marker, NavigationControl } from 'react-map-gl/mapbox';
+import 'mapbox-gl/dist/mapbox-gl.css';
 
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { loginAdmin, signupAdmin } from '@shared/utils/adminAuthApi';
 import {
   type AppRole,
+  clearAdminAuthUnlock,
   clearStoredAdminSession,
   dashboardPathByRole,
+  hasAdminAuthUnlock,
+  normalizeAppPath,
   persistAdminSession,
   readStoredAdminSession,
   redirectToPath,
@@ -58,6 +63,23 @@ const ADMIN_QUICK_FILL_EMAILS = [
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const STRONG_PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/;
+const PHONE_PATTERN = /^[0-9+()\-\s]{7,20}$/;
+const VEHICLE_NUMBER_PATTERN = /^[A-Za-z0-9\-\s]{4,20}$/;
+const HOSPITAL_ID_PATTERN = /^[A-Za-z0-9\-]{4,30}$/;
+const PUBLIC_AUTH_ROLES: AppRole[] = ['hospital', 'driver'];
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
+const DEFAULT_HOSPITAL_SIGNUP_LOCATION = {
+  lat: 19.1177786,
+  lng: 72.8780686,
+};
+
+function getCurrentHashPath(): string {
+  if (typeof window === 'undefined') {
+    return '/';
+  }
+
+  return normalizeAppPath(window.location.hash.replace(/^#/, '') || '/');
+}
 
 function initialEmailByRole(role: AppRole, hospitalEmails: string[], driverEmails: string[]) {
   if (role === 'hospital') {
@@ -125,17 +147,30 @@ export function AuthPage() {
     signupHospitalUser,
   } = useHospitalAuth();
 
-  const [selectedRole, setSelectedRole] = useState<AppRole>('hospital');
+  const currentPath = getCurrentHashPath();
+  const isAdminSecretRoute = currentPath === '/admin/auth' || currentPath === '/admin/login';
+  const allowedRoles = isAdminSecretRoute ? (['admin'] as AppRole[]) : PUBLIC_AUTH_ROLES;
+
+  const [selectedRole, setSelectedRole] = useState<AppRole>(isAdminSecretRoute ? 'admin' : 'hospital');
   const [mode, setMode] = useState<AuthMode>('login');
   const [accountName, setAccountName] = useState('');
-  const [email, setEmail] = useState(() => initialEmailByRole('hospital', presetHospitalEmails, presetDriverEmails));
+  const [hospitalSignupId, setHospitalSignupId] = useState('');
+  const [hospitalBedCapacity, setHospitalBedCapacity] = useState('');
+  const [hospitalSignupLocation, setHospitalSignupLocation] = useState(DEFAULT_HOSPITAL_SIGNUP_LOCATION);
+  const [hospitalLocationPicked, setHospitalLocationPicked] = useState(false);
+  const [email, setEmail] = useState(() =>
+    initialEmailByRole(isAdminSecretRoute ? 'admin' : 'hospital', presetHospitalEmails, presetDriverEmails),
+  );
   const [password, setPassword] = useState(() =>
-    initialPasswordByRole('hospital', defaultHospitalPassword, defaultDriverPassword),
+    initialPasswordByRole(isAdminSecretRoute ? 'admin' : 'hospital', defaultHospitalPassword, defaultDriverPassword),
   );
   const [confirmPassword, setConfirmPassword] = useState(() =>
-    initialPasswordByRole('hospital', defaultHospitalPassword, defaultDriverPassword),
+    initialPasswordByRole(isAdminSecretRoute ? 'admin' : 'hospital', defaultHospitalPassword, defaultDriverPassword),
   );
   const [adminAccessCode, setAdminAccessCode] = useState('');
+  const [driverPhone, setDriverPhone] = useState('');
+  const [driverVehicleNumber, setDriverVehicleNumber] = useState('');
+  const [driverLinkedHospitalId, setDriverLinkedHospitalId] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -185,6 +220,10 @@ export function AuthPage() {
   );
 
   useEffect(() => {
+    if (isAdminSecretRoute) {
+      return;
+    }
+
     const authenticatedRole = resolveAuthenticatedRole({
       isHospitalAuthenticated: Boolean(isHospitalAuthenticated && hospitalUser),
       isDriverAuthenticated: Boolean(isDriverAuthenticated && driverUser),
@@ -196,12 +235,44 @@ export function AuthPage() {
     }
 
     redirectToPath(dashboardPathByRole(authenticatedRole));
-  }, [driverUser, hospitalUser, isDriverAuthenticated, isHospitalAuthenticated]);
+  }, [driverUser, hospitalUser, isAdminSecretRoute, isDriverAuthenticated, isHospitalAuthenticated]);
+
+  useEffect(() => {
+    if (!isAdminSecretRoute) {
+      clearAdminAuthUnlock();
+
+      if (selectedRole === 'admin') {
+        setSelectedRole('hospital');
+      }
+
+      return;
+    }
+
+    if (!hasAdminAuthUnlock()) {
+      redirectToPath('/auth');
+      return;
+    }
+
+    if (selectedRole !== 'admin') {
+      setSelectedRole('admin');
+    }
+
+    if (mode !== 'login') {
+      setMode('login');
+    }
+  }, [isAdminSecretRoute, mode, selectedRole]);
 
   useEffect(() => {
     setErrorMessage(null);
     setAccountName('');
+    setHospitalSignupId('');
+    setHospitalBedCapacity('');
+    setHospitalSignupLocation(DEFAULT_HOSPITAL_SIGNUP_LOCATION);
+    setHospitalLocationPicked(false);
     setAdminAccessCode('');
+    setDriverPhone('');
+    setDriverVehicleNumber('');
+    setDriverLinkedHospitalId('');
 
     const nextEmail = initialEmailByRole(selectedRole, presetHospitalEmails, presetDriverEmails);
     const nextPassword = initialPasswordByRole(selectedRole, defaultHospitalPassword, defaultDriverPassword);
@@ -230,7 +301,62 @@ export function AuthPage() {
       return 'Enter a valid email address.';
     }
 
-    if (mode === 'signup' && !accountName.trim()) {
+    if (selectedRole === 'admin' && !isAdminSecretRoute) {
+      return 'Admin login is available only through secure access.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'hospital' && !hospitalSignupId.trim()) {
+      return 'Hospital ID is required for signup.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'hospital' && !HOSPITAL_ID_PATTERN.test(hospitalSignupId.trim())) {
+      return 'Enter a valid hospital ID.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'hospital' && !hospitalBedCapacity.trim()) {
+      return 'Bed capacity is required for signup.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'hospital') {
+      const parsedCapacity = Number.parseInt(hospitalBedCapacity.trim(), 10);
+      if (!Number.isFinite(parsedCapacity) || parsedCapacity < 1 || parsedCapacity > 5000) {
+        return 'Bed capacity must be between 1 and 5000.';
+      }
+    }
+
+    if (mode === 'signup' && selectedRole === 'hospital' && MAPBOX_TOKEN && !hospitalLocationPicked) {
+      return 'Select hospital location on the map.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'driver' && !driverPhone.trim()) {
+      return 'Phone is required for driver signup.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'driver' && !PHONE_PATTERN.test(driverPhone.trim())) {
+      return 'Enter a valid phone number.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'driver' && !driverVehicleNumber.trim()) {
+      return 'Vehicle number is required for driver signup.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'driver' && !VEHICLE_NUMBER_PATTERN.test(driverVehicleNumber.trim())) {
+      return 'Enter a valid vehicle number.';
+    }
+
+    if (mode === 'signup' && selectedRole === 'driver' && !driverLinkedHospitalId.trim()) {
+      return 'Linked hospital ID is required for driver signup.';
+    }
+
+    if (
+      mode === 'signup' &&
+      selectedRole === 'driver' &&
+      !HOSPITAL_ID_PATTERN.test(driverLinkedHospitalId.trim())
+    ) {
+      return 'Enter a valid linked hospital ID.';
+    }
+
+    if (mode === 'signup' && selectedRole !== 'hospital' && !accountName.trim()) {
       return `${activeRoleConfig.signupNameLabel} is required for signup.`;
     }
 
@@ -260,8 +386,17 @@ export function AuthPage() {
     }
 
     const normalizedName = accountName.trim();
+    const normalizedHospitalId = hospitalSignupId.trim().toUpperCase();
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedPassword = password.trim();
+    const normalizedHospitalBedCapacity = Number.parseInt(hospitalBedCapacity.trim(), 10);
+    const normalizedHospitalLocation = {
+      lat: hospitalSignupLocation.lat,
+      lng: hospitalSignupLocation.lng,
+    };
+    const normalizedPhone = driverPhone.trim();
+    const normalizedVehicleNumber = driverVehicleNumber.trim().toUpperCase();
+    const normalizedLinkedHospitalId = driverLinkedHospitalId.trim().toUpperCase();
 
     setIsSubmitting(true);
 
@@ -284,9 +419,22 @@ export function AuthPage() {
           });
         }
       } else if (selectedRole === 'hospital') {
-        await signupHospitalUser(normalizedName, normalizedEmail, normalizedPassword);
+        await signupHospitalUser(
+          normalizedHospitalId,
+          normalizedEmail,
+          normalizedPassword,
+          normalizedHospitalLocation,
+          normalizedHospitalBedCapacity,
+        );
       } else if (selectedRole === 'driver') {
-        await signupDriverUser(normalizedName, normalizedEmail, normalizedPassword);
+        await signupDriverUser(
+          normalizedName,
+          normalizedEmail,
+          normalizedPassword,
+          normalizedPhone,
+          normalizedVehicleNumber,
+          normalizedLinkedHospitalId,
+        );
       } else {
         const session = await signupAdmin({
           adminName: normalizedName,
@@ -325,32 +473,36 @@ export function AuthPage() {
         <h1>{formHeading(selectedRole, mode)}</h1>
         <p className="auth-page-subtitle">{activeRoleConfig.subtitle}</p>
 
-        <div className="auth-page-role-switch" role="tablist" aria-label="Select account role">
-          {(Object.keys(ROLE_CONFIG) as AppRole[]).map((role) => (
-            <button
-              key={role}
-              type="button"
-              className={selectedRole === role ? 'active' : ''}
-              onClick={() => setSelectedRole(role)}
-            >
-              {ROLE_CONFIG[role].label}
-            </button>
-          ))}
-        </div>
+        {allowedRoles.length > 1 ? (
+          <div className="auth-page-role-switch" role="tablist" aria-label="Select account role">
+            {allowedRoles.map((role) => (
+              <button
+                key={role}
+                type="button"
+                className={selectedRole === role ? 'active' : ''}
+                onClick={() => setSelectedRole(role)}
+              >
+                {ROLE_CONFIG[role].label}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
-        <div className="auth-page-mode-switch" role="tablist" aria-label="Select authentication mode">
-          <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>
-            Login
-          </button>
-          <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>
-            Signup
-          </button>
-        </div>
+        {!isAdminSecretRoute ? (
+          <div className="auth-page-mode-switch" role="tablist" aria-label="Select authentication mode">
+            <button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>
+              Login
+            </button>
+            <button type="button" className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>
+              Signup
+            </button>
+          </div>
+        ) : null}
 
         <p className="auth-page-hint">{credentialHint}</p>
 
         <form className="auth-page-form" onSubmit={handleSubmit}>
-          {mode === 'signup' ? (
+          {mode === 'signup' && selectedRole !== 'hospital' ? (
             <label>
               {activeRoleConfig.signupNameLabel}
               <input
@@ -358,10 +510,121 @@ export function AuthPage() {
                 value={accountName}
                 onChange={(event) => setAccountName(event.target.value)}
                 placeholder={activeRoleConfig.signupNamePlaceholder}
-                autoComplete={selectedRole === 'hospital' ? 'organization' : 'name'}
+                autoComplete="name"
                 required
               />
             </label>
+          ) : null}
+
+          {mode === 'signup' && selectedRole === 'hospital' ? (
+            <>
+              <label>
+                Hospital ID
+                <input
+                  type="text"
+                  value={hospitalSignupId}
+                  onChange={(event) => setHospitalSignupId(event.target.value.toUpperCase())}
+                  placeholder="HSP-MUM-009"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+
+              <label>
+                Bed Capacity
+                <input
+                  type="number"
+                  value={hospitalBedCapacity}
+                  onChange={(event) => setHospitalBedCapacity(event.target.value)}
+                  placeholder="120"
+                  min={1}
+                  max={5000}
+                  step={1}
+                  required
+                />
+              </label>
+
+              <div className="auth-page-map-field" aria-label="Hospital location picker">
+                <p>Select Hospital Location</p>
+
+                {MAPBOX_TOKEN ? (
+                  <div className="auth-page-map-shell">
+                    <Map
+                      mapboxAccessToken={MAPBOX_TOKEN}
+                      initialViewState={{
+                        latitude: hospitalSignupLocation.lat,
+                        longitude: hospitalSignupLocation.lng,
+                        zoom: 12,
+                      }}
+                      mapStyle="mapbox://styles/mapbox/streets-v12"
+                      style={{ width: '100%', height: '100%' }}
+                      onClick={(event) => {
+                        setHospitalSignupLocation({
+                          lat: event.lngLat.lat,
+                          lng: event.lngLat.lng,
+                        });
+                        setHospitalLocationPicked(true);
+                      }}
+                    >
+                      <NavigationControl position="top-right" />
+                      <Marker
+                        longitude={hospitalSignupLocation.lng}
+                        latitude={hospitalSignupLocation.lat}
+                        color="#d72b2b"
+                      />
+                    </Map>
+                  </div>
+                ) : (
+                  <p className="auth-page-map-warning">
+                    Mapbox token missing. Set VITE_MAPBOX_ACCESS_TOKEN to pick exact hospital location on map.
+                  </p>
+                )}
+
+                <p className="auth-page-map-coords">
+                  Selected: {hospitalSignupLocation.lat.toFixed(6)}, {hospitalSignupLocation.lng.toFixed(6)}
+                </p>
+              </div>
+            </>
+          ) : null}
+
+          {mode === 'signup' && selectedRole === 'driver' ? (
+            <>
+              <label>
+                Phone
+                <input
+                  type="tel"
+                  value={driverPhone}
+                  onChange={(event) => setDriverPhone(event.target.value)}
+                  placeholder="9876543210"
+                  autoComplete="tel"
+                  required
+                />
+              </label>
+
+              <label>
+                Vehicle Number
+                <input
+                  type="text"
+                  value={driverVehicleNumber}
+                  onChange={(event) => setDriverVehicleNumber(event.target.value.toUpperCase())}
+                  placeholder="MH-01-0000"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+
+              <label>
+                Linked Hospital ID
+                <input
+                  type="text"
+                  value={driverLinkedHospitalId}
+                  onChange={(event) => setDriverLinkedHospitalId(event.target.value.toUpperCase())}
+                  placeholder="HSP-MUM-009"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+            </>
           ) : null}
 
           <label>

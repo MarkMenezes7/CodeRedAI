@@ -22,6 +22,7 @@ export interface PersistableAdminSessionInput {
 }
 
 const ADMIN_AUTH_STORAGE_KEY = 'codered-admin-auth-v1';
+const ADMIN_AUTH_UNLOCK_STORAGE_KEY = 'codered-admin-auth-unlock-v1';
 
 const DASHBOARD_PATH_BY_ROLE: Record<AppRole, string> = {
   hospital: '/hospital-dashboard',
@@ -148,4 +149,28 @@ export function clearStoredAdminSession(): void {
   }
 
   window.localStorage.removeItem(ADMIN_AUTH_STORAGE_KEY);
+}
+
+export function grantAdminAuthUnlock(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.sessionStorage.setItem(ADMIN_AUTH_UNLOCK_STORAGE_KEY, 'granted');
+}
+
+export function hasAdminAuthUnlock(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.sessionStorage.getItem(ADMIN_AUTH_UNLOCK_STORAGE_KEY) === 'granted';
+}
+
+export function clearAdminAuthUnlock(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.sessionStorage.removeItem(ADMIN_AUTH_UNLOCK_STORAGE_KEY);
 }

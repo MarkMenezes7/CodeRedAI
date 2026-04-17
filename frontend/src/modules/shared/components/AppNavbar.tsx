@@ -1,12 +1,20 @@
+import { useEffect, useRef, type MouseEvent } from 'react';
+
 import {
+  grantAdminAuthUnlock,
   readStoredAdminSession,
   resolveAuthenticatedRole,
 } from '@/utils/redirectByRole';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import './AppNavbar.css';
 
+const ADMIN_BRAND_TAP_TARGET = 5;
+const ADMIN_BRAND_TAP_RESET_MS = 8000;
+
 export function AppNavbar() {
   const { driverUser, hospitalUser, isDriverAuthenticated, isHospitalAuthenticated } = useHospitalAuth();
+  const brandTapCountRef = useRef(0);
+  const brandTapResetTimerRef = useRef<number | null>(null);
 
   const authenticatedRole = resolveAuthenticatedRole({
     isHospitalAuthenticated: Boolean(isHospitalAuthenticated && hospitalUser),
@@ -16,10 +24,49 @@ export function AppNavbar() {
 
   const showAuthCta = !authenticatedRole;
 
+  useEffect(() => {
+    return () => {
+      if (brandTapResetTimerRef.current !== null) {
+        window.clearTimeout(brandTapResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  const resetBrandTapSequence = () => {
+    brandTapCountRef.current = 0;
+
+    if (brandTapResetTimerRef.current !== null) {
+      window.clearTimeout(brandTapResetTimerRef.current);
+      brandTapResetTimerRef.current = null;
+    }
+  };
+
+  const handleBrandClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    brandTapCountRef.current += 1;
+
+    if (brandTapResetTimerRef.current !== null) {
+      window.clearTimeout(brandTapResetTimerRef.current);
+      brandTapResetTimerRef.current = null;
+    }
+
+    if (brandTapCountRef.current >= ADMIN_BRAND_TAP_TARGET) {
+      event.preventDefault();
+      grantAdminAuthUnlock();
+      resetBrandTapSequence();
+      window.location.hash = '/admin/auth';
+      return;
+    }
+
+    brandTapResetTimerRef.current = window.setTimeout(() => {
+      brandTapCountRef.current = 0;
+      brandTapResetTimerRef.current = null;
+    }, ADMIN_BRAND_TAP_RESET_MS);
+  };
+
   return (
     <header className="app-navbar-shell">
       <div className="app-navbar">
-        <a href="#/" className="app-navbar-brand" aria-label="CodeRed home">
+        <a href="#/" className="app-navbar-brand" aria-label="CodeRed home" onClick={handleBrandClick}>
           <span className="app-navbar-brand-mark" aria-hidden="true">
             <span className="app-navbar-brand-bar app-navbar-brand-bar-horizontal" />
             <span className="app-navbar-brand-bar app-navbar-brand-bar-vertical" />
@@ -32,7 +79,7 @@ export function AppNavbar() {
         <div className="app-navbar-actions">
           {showAuthCta ? (
             <a className="app-navbar-auth" href="#/auth">
-              Login / Sign Up
+              Join Us
             </a>
           ) : null}
 

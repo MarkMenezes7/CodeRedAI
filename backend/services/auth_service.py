@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import random
-import string
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -59,21 +57,7 @@ def _is_truthy(value: Optional[str]) -> bool:
 DEFAULT_PRESET_PASSWORD = os.getenv("DEFAULT_PRESET_PASSWORD", "Password@123")
 DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin@123")
 DEFAULT_ADMIN_ROLE = os.getenv("DEFAULT_ADMIN_ROLE", "Admin")
-DEFAULT_HOSPITAL_ADDRESS = os.getenv(
-    "DEFAULT_HOSPITAL_ADDRESS",
-    "Marol Maroshi Road, Andheri East, Mumbai 400059",
-)
-DEFAULT_HOSPITAL_LAT = float(os.getenv("DEFAULT_HOSPITAL_LAT", "19.1177786"))
-DEFAULT_HOSPITAL_LNG = float(os.getenv("DEFAULT_HOSPITAL_LNG", "72.8780686"))
-DEFAULT_LINKED_HOSPITAL_ID = os.getenv("DEFAULT_LINKED_HOSPITAL_ID", "HSP-MUM-009")
-DEFAULT_DRIVER_VEHICLE_NUMBER = os.getenv("DEFAULT_DRIVER_VEHICLE_NUMBER", "MH-01-0000")
 SEED_DEFAULT_ADMINS = _is_truthy(os.getenv("SEED_DEFAULT_ADMINS", "false"))
-
-
-def _generate_hospital_id() -> str:
-    """Generate a unique readable hospital ID like HSP-A3X7."""
-    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
-    return f"HSP-{suffix}"
 
 DEFAULT_ADMIN_ACCOUNTS = [
     {
@@ -121,9 +105,11 @@ def _build_hospital_user(doc: Dict[str, Any]) -> Dict[str, Any]:
             location_out = loc
 
     return {
-        "id": str(doc["_id"]),
-        "name": doc.get("name", ""),
+        "id": doc.get("hospital_id") or str(doc["_id"]),
+        "name": doc.get("name") or doc.get("hospital_id", ""),
         "email": doc.get("email", ""),
+        "hospitalId": doc.get("hospital_id"),
+        "bedCapacity": doc.get("bed_capacity"),
         "address": doc.get("address"),
         "location": location_out,
     }
@@ -162,34 +148,54 @@ def _issue_token(user: Dict[str, Any], role: str) -> str:
 
 def signup_hospital(payload: HospitalSignupRequest) -> AuthResult:
     collection = get_hospitals_collection()
+    hospital_id = payload.hospitalId.strip().upper()
     email = _normalize_email(payload.email)
+    bed_capacity = payload.bedCapacity
+    location = payload.location
     now = datetime.utcnow()
 
+    if not hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Hospital ID is required.",
+        )
+
     doc = {
-        "hospital_id": _generate_hospital_id(),
-        "name": payload.hospitalName.strip(),
+        "hospital_id": hospital_id,
+        "name": hospital_id,
         "email": email,
         "password_hash": hash_password(payload.password),
         "role": "hospital",
-        "address": DEFAULT_HOSPITAL_ADDRESS,
-        # GeoJSON Point format required for MongoDB 2dsphere geo-queries
+        "bed_capacity": bed_capacity,
         "location": {
             "type": "Point",
-            "coordinates": [DEFAULT_HOSPITAL_LNG, DEFAULT_HOSPITAL_LAT],  # [lng, lat]
+            "coordinates": [location.lng, location.lat],  # [lng, lat]
         },
-        "available_beds": 10,
         "status": "active",
-        "contact": "",
         "created_at": now,
         "updated_at": now,
     }
 
     try:
+        email_exists = collection.find_one({"email": email}, {"_id": 1})
+        if email_exists:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered.",
+            )
+
+        hospital_id_exists = collection.find_one({"hospital_id": hospital_id}, {"_id": 1})
+        if hospital_id_exists:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Hospital ID already registered.",
+            )
+
         result = collection.insert_one(doc)
     except DuplicateKeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Email already registered.",
+            detail="Hospital ID or email already registered.",
         ) from exc
     except PyMongoError as exc:
         _raise_db_unavailable(exc)
@@ -229,14 +235,35 @@ def signup_driver(payload: DriverSignupRequest) -> AuthResult:
     collection = get_drivers_collection()
     email = _normalize_email(payload.email)
     now = datetime.utcnow()
+    phone = payload.phone.strip()
+    vehicle_number = payload.vehicleNumber.strip().upper()
+    linked_hospital_id = payload.linkedHospitalId.strip().upper()
+
+    if not phone:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Phone is required.",
+        )
+
+    if not vehicle_number:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Vehicle number is required.",
+        )
+
+    if not linked_hospital_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Linked hospital ID is required.",
+        )
 
     doc = {
         "name": payload.driverName.strip(),
         "email": email,
-        "phone": payload.phone or "",
+        "phone": phone,
         "call_sign": _build_callsign(payload.driverName, email),
-        "vehicle_number": DEFAULT_DRIVER_VEHICLE_NUMBER,
-        "linked_hospital_id": DEFAULT_LINKED_HOSPITAL_ID,
+        "vehicle_number": vehicle_number,
+        "linked_hospital_id": linked_hospital_id,
         "password_hash": hash_password(payload.password),
         "role": "driver",
         "created_at": now,

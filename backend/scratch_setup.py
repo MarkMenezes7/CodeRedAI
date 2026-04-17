@@ -5,7 +5,14 @@ from database import get_database
 db = get_database()
 db.drivers.delete_many({'email': 'testdriver3@gmail.com'})
 
-req = DriverSignupRequest(driverName='Live Driver', email='testdriver3@gmail.com', password='Password@123', phone='9876543210')
+req = DriverSignupRequest(
+    driverName='Live Driver',
+    email='testdriver3@gmail.com',
+    password='Password@123',
+    phone='9876543210',
+    vehicleNumber='MH-01-0000',
+    linkedHospitalId='HSP-MUM-009',
+)
 res = signup_driver(req)
 
 db.drivers.update_one({'email': 'testdriver3@gmail.com'}, {
