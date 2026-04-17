@@ -4,7 +4,9 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { DriverAuthPage } from './DriverAuthPage';
+import { DriverLayout } from './DriverLayout';
 import type {
+  DispatchOffer,
   DriverStatus,
   GeoPoint,
   HospitalLocationRef,
@@ -41,6 +43,7 @@ type RouteStop = {
 const STORAGE_KEY_PREFIX = 'codered-hospital-demo-v3';
 const DEFAULT_HOSPITAL_ID = 'HSP-MUM-009';
 const DEFAULT_POINT: GeoPoint = { lat: 19.1178, lng: 72.8781 };
+const DISPATCH_OFFER_SECONDS = 10;
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
 
@@ -132,7 +135,10 @@ function loadOpsStateByKey(key: string): HospitalOpsState | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isHospitalOpsState(parsed)) {
-      return parsed;
+      return {
+        ...parsed,
+        pendingDispatchOffers: Array.isArray(parsed.pendingDispatchOffers) ? parsed.pendingDispatchOffers : [],
+      };
     }
   } catch {
     return null;
@@ -257,6 +263,23 @@ function goldenTone(remainingSeconds: number): StatusTone {
   return 'success';
 }
 
+function isDispatchableOfferRequest(request: PatientRequest | null) {
+  return Boolean(request && (request.status === 'new' || request.status === 'triaged'));
+}
+
+function isDispatchOfferDriverAvailable(driverStatus: DriverStatus | undefined, occupied: boolean | undefined) {
+  return Boolean(driverStatus === 'available' && !occupied);
+}
+
+function offerSecondsLeft(offer: DispatchOffer, nowMs: number) {
+  const expiresAtMs = Date.parse(offer.expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+}
+
 function appendEvent(
   state: HospitalOpsState,
   eventType: OpsEvent['type'],
@@ -331,6 +354,7 @@ export function DriverDashboard() {
   const [alertStrip, setAlertStrip] = useState<string | null>(null);
   const [isRouteClear, setIsRouteClear] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [isAcceptingDispatchOffer, setIsAcceptingDispatchOffer] = useState(false);
 
   const syncLinkedState = useCallback(() => {
     if (!isDriverAuthenticated) {
@@ -429,9 +453,62 @@ export function DriverDashboard() {
   }, [alertStrip]);
 
   const linkedDrivers = opsState?.drivers ?? [];
+  const pendingDispatchOffers = opsState?.pendingDispatchOffers ?? [];
   const selectedDriver = useMemo(
     () => linkedDrivers.find((driver) => driver.id === selectedDriverId) ?? null,
     [linkedDrivers, selectedDriverId],
+  );
+
+  const dispatchOffer = useMemo(() => {
+    if (!opsState || !driverUser) {
+      return null;
+    }
+
+    const offersForDriver = pendingDispatchOffers
+      .filter((offer) => offer.offeredDriverId === driverUser.id)
+      .sort((left, right) => Date.parse(left.expiresAt) - Date.parse(right.expiresAt));
+
+    for (const offer of offersForDriver) {
+      const request = opsState.requests.find((candidate) => candidate.id === offer.requestId) ?? null;
+      const driver = opsState.drivers.find((candidate) => candidate.id === offer.offeredDriverId) ?? null;
+
+      if (!isDispatchableOfferRequest(request)) {
+        continue;
+      }
+
+      if (!isDispatchOfferDriverAvailable(driver?.status, driver?.occupied)) {
+        continue;
+      }
+
+      if (offerSecondsLeft(offer, nowTick) <= 0) {
+        continue;
+      }
+
+      return offer;
+    }
+
+    return null;
+  }, [driverUser, nowTick, opsState, pendingDispatchOffers]);
+
+  const dispatchOfferRequest = useMemo(() => {
+    if (!opsState || !dispatchOffer) {
+      return null;
+    }
+
+    return opsState.requests.find((request) => request.id === dispatchOffer.requestId) ?? null;
+  }, [dispatchOffer, opsState]);
+
+  const dispatchOfferDriver = useMemo(() => {
+    if (!opsState || !dispatchOffer) {
+      return null;
+    }
+
+    return opsState.drivers.find((driver) => driver.id === dispatchOffer.offeredDriverId) ?? null;
+  }, [dispatchOffer, opsState]);
+
+  const dispatchOfferSecondsRemaining = useMemo(
+    () => (dispatchOffer ? offerSecondsLeft(dispatchOffer, nowTick) : 0),
+    [dispatchOffer, nowTick],
   );
 
   const activeRequest = useMemo(() => {
@@ -745,6 +822,111 @@ export function DriverDashboard() {
     setOpsState(nextState);
   };
 
+  const handleAcceptDispatchOffer = async () => {
+    if (!opsState || !dispatchOffer || !dispatchOfferRequest || !dispatchOfferDriver) {
+      setToast({ message: 'No valid dispatch offer available.', tone: 'warning' });
+      return;
+    }
+
+    if (dispatchOfferSecondsRemaining <= 0) {
+      setToast({ message: 'Dispatch offer already expired.', tone: 'warning' });
+      return;
+    }
+
+    if (!isDispatchOfferDriverAvailable(dispatchOfferDriver.status, dispatchOfferDriver.occupied)) {
+      setToast({ message: 'Driver unit is no longer available for this request.', tone: 'warning' });
+      return;
+    }
+
+    setIsAcceptingDispatchOffer(true);
+
+    try {
+      const [routeToPatientFromApi, routeToHospitalFromApi] = await Promise.all([
+        fetchRoadRouteFromApi(dispatchOfferDriver.location, dispatchOfferRequest.location),
+        fetchRoadRouteFromApi(dispatchOfferRequest.location, opsState.hospital.location),
+      ]);
+
+      const routeToPatient =
+        routeToPatientFromApi.length > 1
+          ? routeToPatientFromApi
+          : buildRoadRoute(dispatchOfferDriver.location, dispatchOfferRequest.location);
+
+      const routeToHospital =
+        routeToHospitalFromApi.length > 1
+          ? routeToHospitalFromApi
+          : buildRoadRoute(dispatchOfferRequest.location, opsState.hospital.location);
+
+      const nowIso = new Date().toISOString();
+      const etaToPatient = estimateEtaMinutes(
+        routeDistanceKm(routeToPatient),
+        Math.max(dispatchOfferDriver.speedKmph, 24),
+      );
+
+      const nextDrivers = opsState.drivers.map((driver) => {
+        if (driver.id !== dispatchOfferDriver.id) {
+          return driver;
+        }
+
+        return {
+          ...driver,
+          status: 'to_patient' as const,
+          occupied: false,
+          assignment: {
+            requestId: dispatchOfferRequest.id,
+            stage: 'to_patient' as const,
+            stageTicks: 0,
+            route: routeToPatient,
+            routeIndex: 1,
+            hospitalRoute: routeToHospital,
+          },
+          etaMinutes: etaToPatient,
+          lastPingAt: nowIso,
+          secondsSincePing: 0,
+        };
+      });
+
+      const nextRequests = opsState.requests.map((request) => {
+        if (request.id !== dispatchOfferRequest.id) {
+          return request;
+        }
+
+        return {
+          ...request,
+          status: 'dispatched' as const,
+          assignedDriverId: dispatchOfferDriver.id,
+          hospitalId: opsState.hospital.id,
+          notes: `${request.notes ? `${request.notes} | ` : ''}Dispatch accepted by ${dispatchOfferDriver.callSign}.`,
+        };
+      });
+
+      let nextState: HospitalOpsState = {
+        ...opsState,
+        drivers: nextDrivers,
+        requests: nextRequests,
+        pendingDispatchOffers: (opsState.pendingDispatchOffers ?? []).filter(
+          (offer) => offer.requestId !== dispatchOfferRequest.id,
+        ),
+        lastSimulationAt: nowIso,
+      };
+
+      nextState = appendEvent(
+        nextState,
+        'dispatch',
+        `${dispatchOfferDriver.callSign} accepted dispatch request for ${dispatchOfferRequest.id}.`,
+        dispatchOfferRequest.id,
+        dispatchOfferDriver.id,
+      );
+
+      updateLinkedState(nextState);
+      setSelectedDriverId(dispatchOfferDriver.id);
+      setToast({ message: `Dispatch accepted for ${dispatchOfferRequest.id}.`, tone: 'success' });
+    } catch {
+      setToast({ message: 'Unable to accept dispatch request right now. Please retry.', tone: 'warning' });
+    } finally {
+      setIsAcceptingDispatchOffer(false);
+    }
+  };
+
   const handleToggleRoute = () => {
     setIsRouteClear((prev) => !prev);
   };
@@ -825,7 +1007,7 @@ export function DriverDashboard() {
     setAlertStrip('SOS sent to dispatch');
   };
 
-  const handleMarkPicked = () => {
+  const handleMarkPicked = async () => {
     if (!opsState || !selectedDriver || !activeRequest) {
       setToast({ message: 'No active pickup route available.', tone: 'warning' });
       return;
@@ -843,10 +1025,14 @@ export function DriverDashboard() {
 
     const nowIso = new Date().toISOString();
 
+    const routedToHospital = await fetchRoadRouteFromApi(activeRequest.location, opsState.hospital.location);
+
     const hospitalRoute =
-      selectedDriver.assignment?.hospitalRoute && selectedDriver.assignment.hospitalRoute.length > 1
-        ? selectedDriver.assignment.hospitalRoute
-        : buildRoadRoute(activeRequest.location, opsState.hospital.location);
+      routedToHospital.length > 1
+        ? routedToHospital
+        : selectedDriver.assignment?.hospitalRoute && selectedDriver.assignment.hospitalRoute.length > 1
+          ? selectedDriver.assignment.hospitalRoute
+          : buildRoadRoute(activeRequest.location, opsState.hospital.location);
 
     const etaToHospital = estimateEtaMinutes(
       routeDistanceKm(hospitalRoute),
@@ -986,7 +1172,7 @@ export function DriverDashboard() {
     setToast({ message: 'Mission marked as arrived', tone: 'success' });
   };
 
-  const handleStatusAdvance = () => {
+  const handleStatusAdvance = async () => {
     if (!opsState || !selectedDriver) {
       setToast({ message: 'Waiting for linked hospital state.', tone: 'warning' });
       return;
@@ -1019,8 +1205,21 @@ export function DriverDashboard() {
     let eventMessage = '';
 
     if (selectedDriver.status === 'available') {
-      const routeToPatient = buildRoadRoute(selectedDriver.location, activeRequest.location);
-      const routeToHospital = buildRoadRoute(activeRequest.location, opsState.hospital.location);
+      const [routeToPatientFromApi, routeToHospitalFromApi] = await Promise.all([
+        fetchRoadRouteFromApi(selectedDriver.location, activeRequest.location),
+        fetchRoadRouteFromApi(activeRequest.location, opsState.hospital.location),
+      ]);
+
+      const routeToPatient =
+        routeToPatientFromApi.length > 1
+          ? routeToPatientFromApi
+          : buildRoadRoute(selectedDriver.location, activeRequest.location);
+
+      const routeToHospital =
+        routeToHospitalFromApi.length > 1
+          ? routeToHospitalFromApi
+          : buildRoadRoute(activeRequest.location, opsState.hospital.location);
+
       const etaToPatient = estimateEtaMinutes(routeDistanceKm(routeToPatient), Math.max(selectedDriver.speedKmph, 24));
 
       nextDriver = {
@@ -1144,6 +1343,13 @@ export function DriverDashboard() {
     return <DriverAuthPage />;
   }
 
+  const missionActive = Boolean(
+    selectedDriver &&
+      (selectedDriver.status === 'to_patient' ||
+        selectedDriver.status === 'with_patient' ||
+        selectedDriver.status === 'to_hospital'),
+  );
+
   const routeConditionLabel = isRouteClear ? 'Clear' : 'Delay';
 
   const routeStops = buildDefaultStops(
@@ -1158,7 +1364,8 @@ export function DriverDashboard() {
   );
 
   return (
-    <main className="driver-console">
+    <DriverLayout missionActive={missionActive} pickupCount={pendingDispatchOffers.length}>
+      <main className="driver-console">
       <header className="driver-head">
         <div className="driver-head-copy">
           <p className="driver-eyebrow">Driver Operations Console</p>
@@ -1196,6 +1403,35 @@ export function DriverDashboard() {
           </button>
         </div>
       </header>
+
+      {dispatchOffer && dispatchOfferRequest && dispatchOfferDriver ? (
+        <section className="dispatch-offer-card" aria-label="Incoming dispatch request">
+          <div className="dispatch-offer-head">
+            <p className="dispatch-offer-eyebrow">Dispatch Request</p>
+            <span className="dispatch-offer-timer mono">{formatClock(dispatchOfferSecondsRemaining)}</span>
+          </div>
+
+          <div className="dispatch-offer-grid">
+            <p>
+              <strong>{dispatchOfferRequest.id}</strong> · {dispatchOfferRequest.severity.toUpperCase()}
+            </p>
+            <p>{dispatchOfferRequest.address}</p>
+            <p>{dispatchOfferRequest.symptom}</p>
+            <p className="dispatch-offer-meta">Offered to {dispatchOfferDriver.callSign} for {DISPATCH_OFFER_SECONDS}s.</p>
+          </div>
+
+          <button
+            type="button"
+            className="dispatch-offer-accept"
+            onClick={() => {
+              void handleAcceptDispatchOffer();
+            }}
+            disabled={isAcceptingDispatchOffer || dispatchOfferSecondsRemaining <= 0}
+          >
+            {isAcceptingDispatchOffer ? 'Accepting...' : 'Accept Dispatch'}
+          </button>
+        </section>
+      ) : null}
 
       <section className="driver-kpi-grid" aria-label="Mission snapshot">
         <article className="kpi-card">
@@ -1412,6 +1648,7 @@ export function DriverDashboard() {
           </aside>
         ) : null}
       </div>
-    </main>
+      </main>
+    </DriverLayout>
   );
 }
