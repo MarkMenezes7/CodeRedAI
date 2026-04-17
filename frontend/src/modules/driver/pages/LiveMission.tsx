@@ -20,6 +20,7 @@ import { DriverLayout } from './DriverLayout';
 import { resolveDriverUnitId } from '../utils/driverIdentity';
 
 type ActiveLeg = 'to_pickup' | 'to_hospital' | 'arrived';
+type MissionStatusValue = DriverStatus | PatientRequest['status'] | 'picked_up';
 
 interface MissionCoordinates {
   id: string;
@@ -92,6 +93,23 @@ interface MapboxDirectionsResponse {
   routes?: MapboxDirectionsRoute[];
 }
 
+interface NearestHospital {
+  name: string;
+  address: string;
+  lng: number;
+  lat: number;
+}
+
+interface MapboxGeocodingFeature {
+  text?: string;
+  place_name?: string;
+  center?: [number, number];
+}
+
+interface MapboxGeocodingResponse {
+  features?: MapboxGeocodingFeature[];
+}
+
 const STORAGE_KEY_PREFIX = 'codered-hospital-demo-v3';
 const DEFAULT_HOSPITAL_ID = 'HSP-MUM-009';
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
@@ -99,6 +117,8 @@ const TURN_ANNOUNCE_200_METERS = 200;
 const TURN_ANNOUNCE_50_METERS = 50;
 const ARRIVAL_METERS = 30;
 const REROUTE_METERS = 50;
+const FAST_SIMULATION_INTERVAL_MS = 1000;
+const FAST_SIMULATION_TARGET_LEG_SECONDS = 30;
 
 const routeLineLayer: LayerProps = {
   id: 'live-mission-route-main',
@@ -306,6 +326,50 @@ async function fetchDirectionsRoute(params: {
   };
 }
 
+async function fetchNearestHospital(params: {
+  token: string;
+  proximity: [number, number];
+  signal: AbortSignal;
+}): Promise<NearestHospital> {
+  const [lng, lat] = params.proximity;
+  const search = new URLSearchParams({
+    proximity: `${lng},${lat}`,
+    limit: '1',
+    access_token: params.token,
+  });
+
+  const response = await fetch(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/hospital.json?${search.toString()}`,
+    { signal: params.signal },
+  );
+
+  if (!response.ok) {
+    throw new Error('Nearest hospital lookup failed');
+  }
+
+  const payload = (await response.json()) as MapboxGeocodingResponse;
+  const feature = payload.features?.[0];
+  const center = feature?.center;
+
+  if (
+    !feature ||
+    !feature.text ||
+    !feature.place_name ||
+    !Array.isArray(center) ||
+    !isFiniteCoordinate(center[0]) ||
+    !isFiniteCoordinate(center[1])
+  ) {
+    throw new Error('No nearby hospital found');
+  }
+
+  return {
+    name: feature.text,
+    address: feature.place_name,
+    lng: center[0],
+    lat: center[1],
+  };
+}
+
 function emptyState(message: string) {
   return (
     <section
@@ -339,9 +403,14 @@ export function LiveMission() {
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const [navStepIndex, setNavStepIndex] = useState(0);
+  const [missionStatusOverride, setMissionStatusOverride] = useState<'picked_up' | null>(null);
+  const [nearestHospital, setNearestHospital] = useState<NearestHospital | null>(null);
+  const [isResolvingNearestHospital, setIsResolvingNearestHospital] = useState(false);
 
   const mapRef = useRef<MapRef | null>(null);
   const retryTimerRef = useRef<number | null>(null);
+  const nearestHospitalLookupRef = useRef<AbortController | null>(null);
+  const lastMissionIdRef = useRef<string | null>(null);
   const lastFetchRef = useRef<{ origin: [number, number]; leg: Exclude<ActiveLeg, 'arrived'>; missionId: string } | null>(
     null,
   );
@@ -352,7 +421,6 @@ export function LiveMission() {
   const pickupArrivalAnnouncedRef = useRef(false);
   const hospitalArrivalAnnouncedRef = useRef(false);
   const missionCompleteAnnouncedRef = useRef(false);
-  const prevLegRef = useRef<ActiveLeg>('to_pickup');
 
   const { speak, voiceEnabled, setVoiceEnabled, supportsSpeech } = useVoiceNavigation();
 
@@ -419,6 +487,11 @@ export function LiveMission() {
     return () => {
       if (retryTimerRef.current !== null) {
         window.clearTimeout(retryTimerRef.current);
+      }
+
+      if (nearestHospitalLookupRef.current) {
+        nearestHospitalLookupRef.current.abort();
+        nearestHospitalLookupRef.current = null;
       }
     };
   }, []);
@@ -488,7 +561,18 @@ export function LiveMission() {
     };
   }, [activeRequest, opsState, selectedDriver]);
 
-  const missionStatus = useMemo<DriverStatus | PatientRequest['status'] | null>(() => {
+  const missionDriverPickupDistance = useMemo(() => {
+    if (!mission) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    return distanceMeters(
+      [mission.driverLocation.lng, mission.driverLocation.lat],
+      [mission.pickupLocation.lng, mission.pickupLocation.lat],
+    );
+  }, [mission]);
+
+  const missionStatus = useMemo<MissionStatusValue | null>(() => {
     if (!selectedDriver || !activeRequest) {
       return null;
     }
@@ -497,23 +581,90 @@ export function LiveMission() {
       return activeRequest.status;
     }
 
+    if (missionStatusOverride === 'picked_up') {
+      return 'picked_up';
+    }
+
     return selectedDriver.status;
-  }, [activeRequest, selectedDriver]);
+  }, [activeRequest, missionStatusOverride, selectedDriver]);
+
+  const shouldConfirmPickup =
+    missionStatusOverride !== 'picked_up' && missionDriverPickupDistance <= ARRIVAL_METERS;
 
   const activeLeg = useMemo<ActiveLeg>(() => {
     if (missionStatus === 'completed') {
       return 'arrived';
     }
 
-    if (missionStatus === 'with_patient' || missionStatus === 'to_hospital') {
+    // Keep the driver on pickup leg until explicit pickup confirmation.
+    if (shouldConfirmPickup) {
+      return 'to_pickup';
+    }
+
+    if (missionStatus === 'picked_up' || missionStatus === 'with_patient' || missionStatus === 'to_hospital') {
       return 'to_hospital';
     }
 
     return 'to_pickup';
-  }, [missionStatus]);
+  }, [missionStatus, shouldConfirmPickup]);
 
   const missionActive = Boolean(
-    missionStatus === 'to_patient' || missionStatus === 'with_patient' || missionStatus === 'to_hospital',
+    missionStatus === 'to_patient' ||
+      missionStatus === 'picked_up' ||
+      missionStatus === 'with_patient' ||
+      missionStatus === 'to_hospital',
+  );
+
+  const setMissionStatus = useCallback(
+    (nextStatus: 'picked_up') => {
+      setMissionStatusOverride(nextStatus);
+
+      if (nextStatus !== 'picked_up' || !opsStorageKey || !selectedDriver?.id || typeof window === 'undefined') {
+        return;
+      }
+
+      const latestState = loadOpsStateByKey(opsStorageKey);
+      if (!latestState) {
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      let updated = false;
+
+      const nextDrivers = latestState.drivers.map((driver): typeof driver => {
+        if (driver.id !== selectedDriver.id) {
+          return driver;
+        }
+
+        updated = true;
+        return {
+          ...driver,
+          status: 'to_hospital' as const,
+          occupied: true,
+          assignment: driver.assignment
+            ? {
+                ...driver.assignment,
+                stage: 'to_hospital' as const,
+                stageTicks: 0,
+              }
+            : driver.assignment,
+        };
+      });
+
+      if (!updated) {
+        return;
+      }
+
+      const nextState: HospitalOpsState = {
+        ...latestState,
+        drivers: nextDrivers,
+        lastSimulationAt: nowIso,
+      };
+
+      window.localStorage.setItem(opsStorageKey, JSON.stringify(nextState));
+      setOpsState(nextState);
+    },
+    [opsStorageKey, selectedDriver],
   );
 
   const pickupCount = useMemo(() => {
@@ -617,7 +768,9 @@ export function LiveMission() {
     bearingDegrees,
   } = useDriverSimulation({
     initialPosition: initialDriverPosition,
+    simulationIntervalMs: FAST_SIMULATION_INTERVAL_MS,
     pingIntervalMs: 5000,
+    targetLegDurationSeconds: FAST_SIMULATION_TARGET_LEG_SECONDS,
     onPositionUpdate: ({ lng, lat }) => {
       pingDriverLocation({ lng, lat });
     },
@@ -628,9 +781,44 @@ export function LiveMission() {
   const pickupPosition = mission
     ? ([mission.pickupLocation.lng, mission.pickupLocation.lat] as [number, number])
     : null;
-  const hospitalPosition = mission
-    ? ([mission.hospitalLocation.lng, mission.hospitalLocation.lat] as [number, number])
-    : null;
+  const hospitalPosition = useMemo<[number, number] | null>(() => {
+    if (!mission) {
+      return null;
+    }
+
+    if (missionStatus === 'picked_up') {
+      if (!nearestHospital) {
+        return null;
+      }
+
+      return [nearestHospital.lng, nearestHospital.lat];
+    }
+
+    return [mission.hospitalLocation.lng, mission.hospitalLocation.lat];
+  }, [mission, missionStatus, nearestHospital]);
+
+  useEffect(() => {
+    const missionId = mission?.id ?? null;
+
+    if (lastMissionIdRef.current === missionId) {
+      return;
+    }
+
+    lastMissionIdRef.current = missionId;
+    setMissionStatusOverride(null);
+    setNearestHospital(null);
+    setIsResolvingNearestHospital(false);
+
+    if (nearestHospitalLookupRef.current) {
+      nearestHospitalLookupRef.current.abort();
+      nearestHospitalLookupRef.current = null;
+    }
+
+    lastFetchRef.current = null;
+    pickupArrivalAnnouncedRef.current = false;
+    hospitalArrivalAnnouncedRef.current = false;
+    missionCompleteAnnouncedRef.current = false;
+  }, [mission?.id]);
 
   useEffect(() => {
     if (!mission) {
@@ -640,7 +828,6 @@ export function LiveMission() {
       pickupArrivalAnnouncedRef.current = false;
       hospitalArrivalAnnouncedRef.current = false;
       missionCompleteAnnouncedRef.current = false;
-      prevLegRef.current = 'to_pickup';
     }
   }, [mission]);
 
@@ -801,8 +988,13 @@ export function LiveMission() {
 
     if (activeLeg === 'to_pickup') {
       speak('Route calculated. Navigating to patient pickup.', true);
+      return;
     }
-  }, [activeLeg, fitRouteOverview, routeData, speak]);
+
+    if (activeLeg === 'to_hospital' && missionStatus === 'picked_up') {
+      speak('Navigating to nearest hospital.', true);
+    }
+  }, [activeLeg, fitRouteOverview, missionStatus, routeData, speak]);
 
   useEffect(() => {
     if (!routeData || !effectiveDriverPosition || activeLeg === 'arrived') {
@@ -891,16 +1083,10 @@ export function LiveMission() {
       return;
     }
 
-    if (activeLeg === 'to_hospital' && prevLegRef.current !== 'to_hospital') {
-      speak(`Patient on board. Navigating to ${mission.hospitalLocation.name}.`, true);
-    }
-
     if (activeLeg === 'arrived' && !missionCompleteAnnouncedRef.current) {
-      speak(`Arrived at ${mission.hospitalLocation.name}. Mission complete.`, true);
+      speak('Arrived at hospital. Mission complete.', true);
       missionCompleteAnnouncedRef.current = true;
     }
-
-    prevLegRef.current = activeLeg;
   }, [activeLeg, mission, speak]);
 
   const pickupDistance = useMemo(() => {
@@ -919,24 +1105,95 @@ export function LiveMission() {
     return distanceMeters(effectiveDriverPosition, hospitalPosition);
   }, [effectiveDriverPosition, hospitalPosition]);
 
+  const showMarkAsPickedButton =
+    missionStatus !== 'completed' && missionStatusOverride !== 'picked_up' && pickupDistance <= ARRIVAL_METERS;
+
+  useEffect(() => {
+    if (!showMarkAsPickedButton || pickupArrivalAnnouncedRef.current) {
+      return;
+    }
+
+    pickupArrivalAnnouncedRef.current = true;
+    stopSimulation();
+    speak('You have arrived at pickup location. Please confirm pickup.', true);
+  }, [showMarkAsPickedButton, speak, stopSimulation]);
+
+  const handleMarkAsPicked = useCallback(() => {
+    if (!mission || !effectiveDriverPosition || isResolvingNearestHospital) {
+      return;
+    }
+
+    if (!MAPBOX_TOKEN) {
+      setRouteError('Mapbox token missing. Cannot find nearest hospital.');
+      return;
+    }
+
+    setMissionStatus('picked_up');
+    stopSimulation();
+    setRouteData(null);
+    setNavStepIndex(0);
+    announced200Ref.current.clear();
+    announced50Ref.current.clear();
+    straightAnnouncedRef.current.clear();
+    setRouteError(null);
+    setIsResolvingNearestHospital(true);
+    speak('Patient on board. Finding nearest hospital.', true);
+
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+
+    if (nearestHospitalLookupRef.current) {
+      nearestHospitalLookupRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    nearestHospitalLookupRef.current = controller;
+
+    void fetchNearestHospital({
+      token: MAPBOX_TOKEN,
+      proximity: effectiveDriverPosition,
+      signal: controller.signal,
+    })
+      .then((hospital) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setNearestHospital(hospital);
+        lastFetchRef.current = null;
+        setRetryNonce((value) => value + 1);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setRouteError('Unable to fetch nearest hospital. Tap Mark as Picked to retry.');
+        setMissionStatusOverride(null);
+      })
+      .finally(() => {
+        if (nearestHospitalLookupRef.current === controller) {
+          nearestHospitalLookupRef.current = null;
+        }
+
+        setIsResolvingNearestHospital(false);
+      });
+  }, [effectiveDriverPosition, isResolvingNearestHospital, mission, setMissionStatus, speak, stopSimulation]);
+
   useEffect(() => {
     if (!mission) {
       return;
     }
 
-    if (activeLeg === 'to_pickup' && pickupDistance <= ARRIVAL_METERS && !pickupArrivalAnnouncedRef.current) {
-      speak('Arrived at pickup location. Awaiting patient.', true);
-      pickupArrivalAnnouncedRef.current = true;
-      stopSimulation();
-    }
-
     if (activeLeg === 'to_hospital' && hospitalDistance <= ARRIVAL_METERS && !hospitalArrivalAnnouncedRef.current) {
-      speak(`Arrived at ${mission.hospitalLocation.name}. Mission complete.`, true);
+      speak('Arrived at hospital. Mission complete.', true);
       hospitalArrivalAnnouncedRef.current = true;
       missionCompleteAnnouncedRef.current = true;
       stopSimulation();
     }
-  }, [activeLeg, hospitalDistance, mission, pickupDistance, speak, stopSimulation]);
+  }, [activeLeg, hospitalDistance, mission, speak, stopSimulation]);
 
   const routeGeoJson = useMemo(() => {
     if (!routeData || routeData.coordinates.length < 2) {
@@ -989,12 +1246,12 @@ export function LiveMission() {
   const maneuverModifier = currentStep?.maneuver.modifier ?? 'straight';
   const destinationName =
     activeLeg === 'to_hospital'
-      ? mission?.hospitalLocation.name ?? 'Hospital'
+      ? nearestHospital?.name ?? mission?.hospitalLocation.name ?? 'Hospital'
       : mission?.pickupLocation.address ?? 'Pickup location';
 
   const simulationBannerText = routeData
     ? isSimulating
-      ? '🚑 Simulation running - location updating every 5s'
+      ? '🚑 Simulation running - movement every 1s, ping every 5s'
       : 'Simulation paused'
     : null;
 
@@ -1085,21 +1342,37 @@ export function LiveMission() {
             </p>
           </div>
 
-          {simulationBannerText ? (
+          <div style={{ display: 'grid', gap: '6px', justifyItems: 'end' }}>
             <span
               style={{
                 borderRadius: '999px',
-                border: '1px solid #d1d5db',
-                background: '#f8fafc',
-                color: '#334155',
+                border: '1px solid #fecaca',
+                background: '#fff1f2',
+                color: '#9f1239',
                 fontSize: '12px',
                 fontWeight: 700,
                 padding: '6px 10px',
               }}
             >
-              {simulationBannerText}
+              🚑 Demo Mode (Fast Simulation Enabled)
             </span>
-          ) : null}
+
+            {simulationBannerText ? (
+              <span
+                style={{
+                  borderRadius: '999px',
+                  border: '1px solid #d1d5db',
+                  background: '#f8fafc',
+                  color: '#334155',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  padding: '6px 10px',
+                }}
+              >
+                {simulationBannerText}
+              </span>
+            ) : null}
+          </div>
         </header>
 
         {routeError ? (
@@ -1209,7 +1482,7 @@ export function LiveMission() {
                     placeItems: 'center',
                     boxShadow: '0 8px 16px rgba(15, 23, 42, 0.22)',
                   }}
-                  title={`${mission?.hospitalLocation.name ?? 'Hospital'} • ${mission?.hospitalLocation.address ?? ''}`}
+                  title={`${nearestHospital?.name ?? mission?.hospitalLocation.name ?? 'Hospital'} • ${nearestHospital?.address ?? mission?.hospitalLocation.address ?? ''}`}
                 >
                   +
                 </div>
@@ -1380,6 +1653,33 @@ export function LiveMission() {
             </div>
           ) : null}
 
+          {showMarkAsPickedButton ? (
+            <button
+              type="button"
+              className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-xl shadow-lg z-50"
+              onClick={handleMarkAsPicked}
+              disabled={isResolvingNearestHospital}
+              style={{
+                position: 'absolute',
+                left: '50%',
+                bottom: '24px',
+                transform: 'translateX(-50%)',
+                zIndex: 50,
+                background: '#dc2626',
+                color: '#ffffff',
+                borderRadius: '12px',
+                padding: '12px 24px',
+                fontWeight: 700,
+                boxShadow: '0 12px 28px rgba(15, 23, 42, 0.3)',
+                border: 'none',
+                cursor: isResolvingNearestHospital ? 'wait' : 'pointer',
+                opacity: isResolvingNearestHospital ? 0.8 : 1,
+              }}
+            >
+              {isResolvingNearestHospital ? 'Finding nearest hospital...' : 'Mark as Picked'}
+            </button>
+          ) : null}
+
           <button
             type="button"
             onClick={handleSosVoice}
@@ -1424,7 +1724,7 @@ export function LiveMission() {
               >
                 <h3 style={{ margin: 0, fontSize: '18px' }}>Arrived at destination</h3>
                 <p style={{ margin: '6px 0 0', fontSize: '14px', color: '#e2e8f0' }}>
-                  {mission?.hospitalLocation.name}
+                  {destinationName}
                 </p>
               </div>
             </div>

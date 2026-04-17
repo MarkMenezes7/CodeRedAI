@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 type LngLat = [number, number];
 
-const DEFAULT_SIMULATION_INTERVAL_MS = 5000;
+const DEFAULT_SIMULATION_INTERVAL_MS = 1000;
+const DEFAULT_PING_INTERVAL_MS = 5000;
+const DEFAULT_TARGET_LEG_DURATION_SECONDS = 30;
 const DEFAULT_ARRIVAL_METERS = 30;
 
 export interface UseDriverSimulationOptions {
   initialPosition: LngLat | null;
+  simulationIntervalMs?: number;
   pingIntervalMs?: number;
+  speedMultiplier?: number;
+  targetLegDurationSeconds?: number;
   arrivalDistanceMeters?: number;
   onPositionUpdate?: (position: {
     lng: number;
@@ -86,7 +91,10 @@ function sanitizeRoute(routeCoordinates: LngLat[]) {
 
 export function useDriverSimulation({
   initialPosition,
-  pingIntervalMs = DEFAULT_SIMULATION_INTERVAL_MS,
+  simulationIntervalMs = DEFAULT_SIMULATION_INTERVAL_MS,
+  pingIntervalMs = DEFAULT_PING_INTERVAL_MS,
+  speedMultiplier,
+  targetLegDurationSeconds = DEFAULT_TARGET_LEG_DURATION_SECONDS,
   arrivalDistanceMeters = DEFAULT_ARRIVAL_METERS,
   onPositionUpdate,
 }: UseDriverSimulationOptions): DriverSimulationControls {
@@ -101,6 +109,8 @@ export function useDriverSimulation({
   const intervalRef = useRef<number | null>(null);
   const routeRef = useRef<LngLat[]>([]);
   const indexRef = useRef(0);
+  const stepSizeRef = useRef(1);
+  const lastPingAtRef = useRef(0);
   const initialPositionRef = useRef<LngLat | null>(initialPosition);
   const onPositionUpdateRef = useRef(onPositionUpdate);
 
@@ -138,7 +148,7 @@ export function useDriverSimulation({
   }, []);
 
   const applyIndexPosition = useCallback(
-    (index: number) => {
+    (index: number, shouldPing = true) => {
       const route = routeRef.current;
       if (route.length === 0) {
         setCurrentPosition(initialPositionRef.current);
@@ -164,7 +174,9 @@ export function useDriverSimulation({
         setBearingDegrees(bearingBetween(point, nextPoint));
       }
 
-      emitPositionUpdate(point, safeIndex, arrived);
+      if (shouldPing) {
+        emitPositionUpdate(point, safeIndex, arrived);
+      }
     },
     [emitPositionUpdate],
   );
@@ -180,10 +192,19 @@ export function useDriverSimulation({
       const sanitizedRoute = sanitizeRoute(routeCoordinates);
       routeRef.current = sanitizedRoute;
 
+      const tickDurationMs = Math.max(250, simulationIntervalMs);
+      const targetTickCount = Math.max(1, Math.floor((targetLegDurationSeconds * 1000) / tickDurationMs));
+      const computedStepSize =
+        typeof speedMultiplier === 'number' && Number.isFinite(speedMultiplier) && speedMultiplier > 0
+          ? Math.max(1, Math.floor(speedMultiplier))
+          : Math.max(1, Math.ceil((sanitizedRoute.length - 1) / targetTickCount));
+
       clearSimulationInterval();
       setHasArrived(false);
       setCurrentIndex(0);
       indexRef.current = 0;
+      stepSizeRef.current = computedStepSize;
+      lastPingAtRef.current = 0;
 
       if (sanitizedRoute.length === 0) {
         setIsSimulating(false);
@@ -194,7 +215,8 @@ export function useDriverSimulation({
       }
 
       setIsSimulating(true);
-      applyIndexPosition(0);
+      lastPingAtRef.current = Date.now();
+      applyIndexPosition(0, true);
 
       if (sanitizedRoute.length === 1) {
         stopSimulation();
@@ -203,27 +225,45 @@ export function useDriverSimulation({
       }
 
       intervalRef.current = window.setInterval(() => {
-        const nextIndex = indexRef.current + 1;
-        indexRef.current = nextIndex;
+        const stepSize = Math.max(1, stepSizeRef.current);
+        const nextIndex = indexRef.current + stepSize;
+        const routeLength = routeRef.current.length;
+        const reachedEnd = nextIndex >= routeLength - 1;
+        const boundedIndex = reachedEnd ? routeLength - 1 : nextIndex;
+        indexRef.current = boundedIndex;
 
-        if (nextIndex >= routeRef.current.length) {
-          applyIndexPosition(routeRef.current.length - 1);
+        const now = Date.now();
+        const shouldPing = now - lastPingAtRef.current >= pingIntervalMs || reachedEnd;
+        if (shouldPing) {
+          lastPingAtRef.current = now;
+        }
+
+        applyIndexPosition(boundedIndex, shouldPing);
+
+        if (reachedEnd) {
           stopSimulation();
           setHasArrived(true);
           return;
         }
 
-        applyIndexPosition(nextIndex);
-
         const latestRoute = routeRef.current;
-        const latestPoint = latestRoute[nextIndex];
+        const latestPoint = latestRoute[boundedIndex];
         const destination = latestRoute[latestRoute.length - 1];
         if (latestPoint && destination && distanceMeters(latestPoint, destination) <= arrivalDistanceMeters) {
           setHasArrived(true);
         }
-      }, pingIntervalMs);
+      }, tickDurationMs);
     },
-    [applyIndexPosition, arrivalDistanceMeters, clearSimulationInterval, pingIntervalMs, stopSimulation],
+    [
+      applyIndexPosition,
+      arrivalDistanceMeters,
+      clearSimulationInterval,
+      pingIntervalMs,
+      simulationIntervalMs,
+      speedMultiplier,
+      stopSimulation,
+      targetLegDurationSeconds,
+    ],
   );
 
   const resetSimulation = useCallback(() => {
@@ -232,6 +272,8 @@ export function useDriverSimulation({
     setHasArrived(false);
     setCurrentIndex(0);
     indexRef.current = 0;
+    stepSizeRef.current = 1;
+    lastPingAtRef.current = 0;
 
     const firstRoutePoint = routeRef.current[0] ?? null;
     const resetPosition = initialPositionRef.current ?? firstRoutePoint;
