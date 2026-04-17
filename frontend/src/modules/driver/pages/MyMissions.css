@@ -627,6 +627,15 @@
 
 .mm-td-center { text-align: center; }
 
+.mm-table .status-badge,
+[role='dialog'][aria-modal='true'] .status-badge {
+  color: #111111 !important;
+}
+
+[role='dialog'][aria-modal='true'] strong {
+  color: #111827;
+}
+
 /* Mission ID */
 .mm-td-mission-id { min-width: 130px; }
 

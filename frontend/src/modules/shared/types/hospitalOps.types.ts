@@ -98,10 +98,19 @@ export interface OpsEvent {
   driverId?: string;
 }
 
+export interface DispatchOffer {
+  id: string;
+  requestId: string;
+  offeredDriverId: string;
+  offeredAt: string;
+  expiresAt: string;
+}
+
 export interface HospitalOpsState {
   hospital: HospitalUnit;
   drivers: DriverUnit[];
   requests: PatientRequest[];
+  pendingDispatchOffers?: DispatchOffer[];
   events: OpsEvent[];
   nextRequestNumber: number;
   lastSimulationAt: string;

@@ -900,6 +900,10 @@
   transition: color 0.2s ease;
 }
 
+.da-activity-row-main .status-badge {
+  color: #111111 !important;
+}
+
 .da-activity-row:hover .da-row-action {
   color: #d72b2b;
 }

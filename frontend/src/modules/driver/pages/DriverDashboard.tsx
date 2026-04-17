@@ -125,6 +125,7 @@ function isHospitalOpsState(candidate: unknown): candidate is HospitalOpsState {
 function loadOpsStateByKey(key: string): HospitalOpsState | null {
   if (typeof window === 'undefined') {
     return null;
+
   }
 
   const raw = window.localStorage.getItem(key);
@@ -1369,7 +1370,7 @@ export function DriverDashboard() {
       <header className="driver-head">
         <div className="driver-head-copy">
           <p className="driver-eyebrow">Driver Operations Console</p>
-          <h1>CodeRed Linked Driver Dashboard</h1>
+          <h1>LIVE MISSIONS</h1>
           <p>
             Linked with hospital dispatch state. Driver location, assigned patient pickup, and drop destination stay in
             sync.
