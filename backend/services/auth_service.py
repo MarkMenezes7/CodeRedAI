@@ -352,10 +352,14 @@ def get_preset_hospitals(limit: int = 10) -> Dict[str, Any]:
     return {"defaultPassword": DEFAULT_PRESET_PASSWORD, "hospitals": hospitals}
 
 
-def get_preset_drivers(limit: int = 8) -> Dict[str, Any]:
+def get_preset_drivers(limit: int = 500) -> Dict[str, Any]:
     collection = get_drivers_collection()
     try:
-        docs = list(collection.find({}, {"name": 1, "email": 1, "call_sign": 1}).limit(limit))
+        docs = list(
+            collection.find({}, {"name": 1, "email": 1, "call_sign": 1})
+            .sort("email", 1)
+            .limit(limit)
+        )
     except PyMongoError as exc:
         _raise_db_unavailable(exc)
     drivers = [

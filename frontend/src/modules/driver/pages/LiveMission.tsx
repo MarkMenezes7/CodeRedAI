@@ -17,6 +17,7 @@ import { useHospitalAuth } from '@shared/providers/AuthContext';
 import type { DriverStatus, HospitalOpsState, PatientRequest } from '@shared/types/hospitalOps.types';
 import { DriverAuthPage } from './DriverAuthPage';
 import { DriverLayout } from './DriverLayout';
+import { resolveDriverUnitId } from '../utils/driverIdentity';
 
 type ActiveLeg = 'to_pickup' | 'to_hospital' | 'arrived';
 
@@ -378,19 +379,14 @@ export function LiveMission() {
 
     setOpsStorageKey(resolvedKey);
     setOpsState(parsed);
-    setSelectedDriverId((previousDriverId) => {
-      if (driverUser?.id && parsed.drivers.some((driver) => driver.id === driverUser.id)) {
-        return driverUser.id;
-      }
-
-      if (previousDriverId && parsed.drivers.some((driver) => driver.id === previousDriverId)) {
-        return previousDriverId;
-      }
-
-      const assigned = parsed.drivers.find((driver) => Boolean(driver.assignment));
-      return assigned?.id ?? parsed.drivers[0]?.id ?? null;
-    });
-  }, [driverUser?.id, hospitalUser?.id, isDriverAuthenticated]);
+    setSelectedDriverId((previousDriverId) =>
+      resolveDriverUnitId({
+        driverUser,
+        drivers: parsed.drivers,
+        previousDriverId,
+      }),
+    );
+  }, [driverUser, hospitalUser?.id, isDriverAuthenticated]);
 
   useEffect(() => {
     syncLinkedState();
@@ -427,10 +423,16 @@ export function LiveMission() {
     };
   }, []);
 
-  const selectedDriver = useMemo(
-    () => opsState?.drivers.find((driver) => driver.id === selectedDriverId) ?? null,
-    [opsState, selectedDriverId],
+  const linkedDrivers = opsState?.drivers ?? [];
+  const authenticatedDriverUnitId = useMemo(
+    () => resolveDriverUnitId({ driverUser, drivers: linkedDrivers, previousDriverId: selectedDriverId }),
+    [driverUser, linkedDrivers, selectedDriverId],
   );
+
+  const selectedDriver = useMemo(() => {
+    const targetDriverId = selectedDriverId ?? authenticatedDriverUnitId;
+    return opsState?.drivers.find((driver) => driver.id === targetDriverId) ?? null;
+  }, [authenticatedDriverUnitId, opsState, selectedDriverId]);
 
   const activeRequest = useMemo(() => {
     if (!opsState || !selectedDriver) {
@@ -514,7 +516,15 @@ export function LiveMission() {
     missionStatus === 'to_patient' || missionStatus === 'with_patient' || missionStatus === 'to_hospital',
   );
 
-  const pickupCount = opsState?.pendingDispatchOffers?.length ?? 0;
+  const pickupCount = useMemo(() => {
+    const offers = opsState?.pendingDispatchOffers ?? [];
+
+    if (!selectedDriver?.id) {
+      return 0;
+    }
+
+    return offers.filter((offer) => offer.offeredDriverId === selectedDriver.id).length;
+  }, [opsState?.pendingDispatchOffers, selectedDriver?.id]);
 
   const hasMission = Boolean(mission && selectedDriver && activeRequest);
 

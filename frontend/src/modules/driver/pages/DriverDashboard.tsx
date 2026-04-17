@@ -5,6 +5,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { DriverAuthPage } from './DriverAuthPage';
 import { DriverLayout } from './DriverLayout';
+import { resolveDriverUnitId } from '../utils/driverIdentity';
 import type {
   DispatchOffer,
   DriverStatus,
@@ -381,19 +382,14 @@ export function DriverDashboard() {
 
     setOpsStorageKey(resolvedKey);
     setOpsState(parsed);
-    setSelectedDriverId((prev) => {
-      if (driverUser?.id && parsed.drivers.some((driver) => driver.id === driverUser.id)) {
-        return driverUser.id;
-      }
-
-      if (prev && parsed.drivers.some((driver) => driver.id === prev)) {
-        return prev;
-      }
-
-      const dispatchedDriver = parsed.drivers.find((driver) => Boolean(driver.assignment));
-      return dispatchedDriver?.id ?? parsed.drivers[0]?.id ?? null;
-    });
-  }, [driverUser?.id, hospitalUser?.id, isDriverAuthenticated]);
+    setSelectedDriverId((previousDriverId) =>
+      resolveDriverUnitId({
+        driverUser,
+        drivers: parsed.drivers,
+        previousDriverId,
+      }),
+    );
+  }, [driverUser, hospitalUser?.id, isDriverAuthenticated]);
 
   useEffect(() => {
     syncLinkedState();
@@ -455,18 +451,37 @@ export function DriverDashboard() {
 
   const linkedDrivers = opsState?.drivers ?? [];
   const pendingDispatchOffers = opsState?.pendingDispatchOffers ?? [];
+  const authenticatedDriverUnitId = useMemo(
+    () => resolveDriverUnitId({ driverUser, drivers: linkedDrivers }),
+    [driverUser, linkedDrivers],
+  );
+  const selectableDrivers = useMemo(() => {
+    if (!authenticatedDriverUnitId) {
+      return linkedDrivers;
+    }
+
+    const ownDriver = linkedDrivers.find((driver) => driver.id === authenticatedDriverUnitId);
+    return ownDriver ? [ownDriver] : linkedDrivers;
+  }, [authenticatedDriverUnitId, linkedDrivers]);
+  const pendingOfferCountForDriver = useMemo(() => {
+    if (!authenticatedDriverUnitId) {
+      return 0;
+    }
+
+    return pendingDispatchOffers.filter((offer) => offer.offeredDriverId === authenticatedDriverUnitId).length;
+  }, [authenticatedDriverUnitId, pendingDispatchOffers]);
   const selectedDriver = useMemo(
     () => linkedDrivers.find((driver) => driver.id === selectedDriverId) ?? null,
     [linkedDrivers, selectedDriverId],
   );
 
   const dispatchOffer = useMemo(() => {
-    if (!opsState || !driverUser) {
+    if (!opsState || !authenticatedDriverUnitId) {
       return null;
     }
 
     const offersForDriver = pendingDispatchOffers
-      .filter((offer) => offer.offeredDriverId === driverUser.id)
+      .filter((offer) => offer.offeredDriverId === authenticatedDriverUnitId)
       .sort((left, right) => Date.parse(left.expiresAt) - Date.parse(right.expiresAt));
 
     for (const offer of offersForDriver) {
@@ -489,7 +504,7 @@ export function DriverDashboard() {
     }
 
     return null;
-  }, [driverUser, nowTick, opsState, pendingDispatchOffers]);
+  }, [authenticatedDriverUnitId, nowTick, opsState, pendingDispatchOffers]);
 
   const dispatchOfferRequest = useMemo(() => {
     if (!opsState || !dispatchOffer) {
@@ -948,17 +963,13 @@ export function DriverDashboard() {
 
     const resetState = createInitialHospitalOpsState(hospitalRef);
     updateLinkedState(resetState);
-    setSelectedDriverId((previousDriverId) => {
-      if (driverUser?.id && resetState.drivers.some((driver) => driver.id === driverUser.id)) {
-        return driverUser.id;
-      }
-
-      if (previousDriverId && resetState.drivers.some((driver) => driver.id === previousDriverId)) {
-        return previousDriverId;
-      }
-
-      return resetState.drivers[0]?.id ?? null;
-    });
+    setSelectedDriverId((previousDriverId) =>
+      resolveDriverUnitId({
+        driverUser,
+        drivers: resetState.drivers,
+        previousDriverId,
+      }),
+    );
     setAlertStrip(null);
     setToast({ message: 'Demo data reset to baseline.', tone: 'success' });
   };
@@ -1365,7 +1376,7 @@ export function DriverDashboard() {
   );
 
   return (
-    <DriverLayout missionActive={missionActive} pickupCount={pendingDispatchOffers.length} onLogout={logoutDriverUser}>
+    <DriverLayout missionActive={missionActive} pickupCount={pendingOfferCountForDriver} onLogout={logoutDriverUser}>
       <main className="driver-console">
       <header className="driver-head">
         <div className="driver-head-copy">
@@ -1386,10 +1397,11 @@ export function DriverDashboard() {
             <select
               className="driver-select"
               value={selectedDriverId ?? ''}
+              disabled={Boolean(authenticatedDriverUnitId)}
               onChange={(event) => setSelectedDriverId(event.target.value || null)}
             >
-              {linkedDrivers.length === 0 ? <option value="">No drivers</option> : null}
-              {linkedDrivers.map((driver) => (
+              {selectableDrivers.length === 0 ? <option value="">No drivers</option> : null}
+              {selectableDrivers.map((driver) => (
                 <option key={driver.id} value={driver.id}>
                   {driver.callSign} ({driver.status})
                 </option>

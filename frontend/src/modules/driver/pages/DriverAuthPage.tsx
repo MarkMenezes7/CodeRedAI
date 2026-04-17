@@ -28,7 +28,7 @@ export function DriverAuthPage() {
 
   const redirectToDashboard = () => {
     if (typeof window !== 'undefined') {
-      window.location.hash = '/driver-dashboard';
+      window.location.hash = '/driver/dashboard';
     }
   };
 

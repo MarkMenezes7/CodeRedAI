@@ -17,9 +17,11 @@ import { AlertBanner } from '@shared/components/AlertBanner';
 import { MapView } from '@shared/components/MapView';
 import { StatusBadge } from '@shared/components/StatusBadge';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
+import { getPresetDriverAccounts, type PresetDriverAccount } from '@shared/utils/driverAuthApi';
 import { HospitalAuthPage } from './HospitalAuthPage';
 import {
   DriverStatus,
+  DriverUnit,
   HospitalBedState,
   HospitalLocationRef,
   HospitalOpsState,
@@ -42,6 +44,7 @@ import './HospitalDashboard.css';
 const STORAGE_KEY_PREFIX = 'codered-hospital-demo-v3';
 const DRIVER_PING_SECONDS = 5;
 const AUTO_INTAKE_SECONDS = 42;
+const ROSTER_SYNC_SECONDS = 12;
 const MOBILE_NAV_QUERY = '(max-width: 980px)';
 
 type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds';
@@ -126,6 +129,99 @@ interface ClosestDriverSuggestion {
   driverName: string;
   distanceKm: number;
   etaMinutes: number;
+}
+
+function sanitizeCallSign(value: string | undefined) {
+  return value?.trim() || undefined;
+}
+
+function fallbackCallSign(account: PresetDriverAccount, seedIndex: number) {
+  const source = (account.name || account.email).toUpperCase().replace(/[^A-Z]/g, '');
+  const prefix = source.slice(0, 3) || 'DRV';
+  return `${prefix}-${String((seedIndex % 900) + 100)}`;
+}
+
+function createRosterDriverUnit(
+  account: PresetDriverAccount,
+  hospitalId: string,
+  hospitalLocation: { lat: number; lng: number },
+  seedIndex: number,
+): DriverUnit {
+  const angle = ((seedIndex * 57) % 360) * (Math.PI / 180);
+  const radius = 0.004 + ((seedIndex % 8) + 1) * 0.00045;
+  const latOffset = Math.sin(angle) * radius;
+  const lngOffset = Math.cos(angle) * radius;
+
+  return {
+    id: account.id,
+    callSign: sanitizeCallSign(account.callSign) ?? fallbackCallSign(account, seedIndex),
+    name: account.name || account.email,
+    vehicleNumber: `MH-01-EM-${String((seedIndex % 9000) + 1000).padStart(4, '0')}`,
+    phone: `+91 90000 ${String((seedIndex % 100000)).padStart(5, '0')}`,
+    linkedHospitalId: hospitalId,
+    status: 'available',
+    occupied: false,
+    location: {
+      lat: hospitalLocation.lat + latOffset,
+      lng: hospitalLocation.lng + lngOffset,
+    },
+    speedKmph: 38 + (seedIndex % 14),
+    fuelPct: 58 + (seedIndex % 40),
+    lastPingAt: new Date().toISOString(),
+    pingIntervalSec: 6,
+    secondsSincePing: 0,
+  };
+}
+
+function mergeRosterWithPresetDrivers(params: {
+  stateDrivers: DriverUnit[];
+  presetDrivers: PresetDriverAccount[];
+  hospitalId: string;
+  hospitalLocation: { lat: number; lng: number };
+}): DriverUnit[] {
+  const { stateDrivers, presetDrivers, hospitalId, hospitalLocation } = params;
+
+  if (presetDrivers.length === 0) {
+    return stateDrivers;
+  }
+
+  const nextDrivers = [...stateDrivers];
+  const indexByDriverId = new Map(nextDrivers.map((driver, index) => [driver.id, index]));
+  let hasChanges = false;
+
+  presetDrivers.forEach((account, index) => {
+    const driverId = account.id?.trim();
+    if (!driverId) {
+      return;
+    }
+
+    const existingIndex = indexByDriverId.get(driverId);
+
+    if (existingIndex === undefined) {
+      nextDrivers.push(createRosterDriverUnit(account, hospitalId, hospitalLocation, nextDrivers.length + index));
+      hasChanges = true;
+      return;
+    }
+
+    const existing = nextDrivers[existingIndex];
+    const updated: DriverUnit = {
+      ...existing,
+      linkedHospitalId: hospitalId,
+      callSign: existing.callSign || sanitizeCallSign(account.callSign) || fallbackCallSign(account, existingIndex),
+      name: existing.name || account.name || account.email,
+    };
+
+    if (
+      updated.linkedHospitalId !== existing.linkedHospitalId ||
+      updated.callSign !== existing.callSign ||
+      updated.name !== existing.name
+    ) {
+      nextDrivers[existingIndex] = updated;
+      hasChanges = true;
+    }
+  });
+
+  return hasChanges ? nextDrivers : stateDrivers;
 }
 
 function isHospitalOpsState(candidate: unknown): candidate is HospitalOpsState {
@@ -359,6 +455,55 @@ export function HospitalDashboard() {
       return;
     }
 
+    let isDisposed = false;
+
+    const syncDriverRoster = async () => {
+      try {
+        const presetData = await getPresetDriverAccounts();
+
+        if (isDisposed || presetData.drivers.length === 0) {
+          return;
+        }
+
+        setOpsState((previousState) => {
+          const mergedDrivers = mergeRosterWithPresetDrivers({
+            stateDrivers: previousState.drivers,
+            presetDrivers: presetData.drivers,
+            hospitalId: previousState.hospital.id,
+            hospitalLocation: previousState.hospital.location,
+          });
+
+          if (mergedDrivers === previousState.drivers) {
+            return previousState;
+          }
+
+          return {
+            ...previousState,
+            drivers: mergedDrivers,
+          };
+        });
+      } catch {
+        // Keep existing roster when backend presets are temporarily unavailable.
+      }
+    };
+
+    void syncDriverRoster();
+
+    const intervalId = window.setInterval(() => {
+      void syncDriverRoster();
+    }, ROSTER_SYNC_SECONDS * 1000);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [hospitalUser]);
+
+  useEffect(() => {
+    if (!hospitalUser) {
+      return;
+    }
+
     const id = window.setInterval(() => {
       setOpsState((prev) => {
         const active = prev.requests.filter(
@@ -560,7 +705,7 @@ export function HospitalDashboard() {
       setSelectedRequestId(requestId);
       setSelectedDriverId(driverId);
       setClosestSuggestion(null);
-      setDispatchNotice(`${mode === 'auto' ? 'Auto-dispatched' : 'Dispatched'} ${driver.callSign} â†’ ${request.id}.`);
+      setDispatchNotice(`${mode === 'auto' ? 'Auto-dispatched' : 'Dispatched'} ${driver.callSign} -> ${request.id}.`);
     } finally {
       setIsResolvingRoute(false);
     }
@@ -1025,7 +1170,7 @@ export function HospitalDashboard() {
                       <select value={selectedRequestId ?? ''} onChange={(e) => setSelectedRequestId(e.target.value || null)}>
                         <option value="">Select request...</option>
                         {dispatchableRequests.map((r) => (
-                          <option key={r.id} value={r.id}>{r.id} â€” {r.severity.toUpperCase()} â€” {r.address}</option>
+                          <option key={r.id} value={r.id}>{r.id} - {r.severity.toUpperCase()} - {r.address}</option>
                         ))}
                       </select>
                     </label>
@@ -1034,15 +1179,15 @@ export function HospitalDashboard() {
                       <select value={selectedDriverId ?? ''} onChange={(e) => setSelectedDriverId(e.target.value || null)}>
                         <option value="">Select driver...</option>
                         {availableDrivers.map((d) => (
-                          <option key={d.id} value={d.id}>{d.callSign} â€” {d.name}</option>
+                          <option key={d.id} value={d.id}>{d.callSign} - {d.name}</option>
                         ))}
                       </select>
                     </label>
                   </div>
                   {closestSuggestion && selectedRequestId === closestSuggestion.requestId && (
                     <p className="closest-driver-note">
-                      Closest driver selected: <strong>{closestSuggestion.driverCallSign}</strong> ({closestSuggestion.driverName}) â€”{' '}
-                      {closestSuggestion.distanceKm.toFixed(1)} km â€” ETA {closestSuggestion.etaMinutes} min. Press <strong>Dispatch Selected Pair</strong> to proceed.
+                      Closest driver selected: <strong>{closestSuggestion.driverCallSign}</strong> ({closestSuggestion.driverName}) -{' '}
+                      {closestSuggestion.distanceKm.toFixed(1)} km - ETA {closestSuggestion.etaMinutes} min. Press <strong>Dispatch Selected Pair</strong> to proceed.
                     </p>
                   )}
                   <button type="button" className="btn btn-primary" onClick={handleDispatchSelected} disabled={!selectedRequest || !selectedDriver || isResolvingRoute}>

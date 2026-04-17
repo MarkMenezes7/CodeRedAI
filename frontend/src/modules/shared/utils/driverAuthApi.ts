@@ -15,14 +15,16 @@ export interface DriverAuthSession {
   token: string;
 }
 
+export interface PresetDriverAccount {
+  id: string;
+  name: string;
+  email: string;
+  callSign?: string;
+}
+
 interface PresetDriverResponse {
   defaultPassword: string;
-  drivers: Array<{
-    id: string;
-    name: string;
-    email: string;
-    callSign?: string;
-  }>;
+  drivers: PresetDriverAccount[];
 }
 
 export interface DriverSignupPayload {
@@ -48,10 +50,15 @@ export async function signupDriver(payload: DriverSignupPayload): Promise<Driver
   return response;
 }
 
-export async function getPresetDriverAccounts(): Promise<{ emails: string[]; defaultPassword: string }> {
+export async function getPresetDriverAccounts(): Promise<{
+  emails: string[];
+  defaultPassword: string;
+  drivers: PresetDriverAccount[];
+}> {
   const response = await apiRequest<PresetDriverResponse>('/api/driver/presets');
   return {
     emails: response.drivers.map((driver) => driver.email),
     defaultPassword: response.defaultPassword,
+    drivers: response.drivers,
   };
 }
