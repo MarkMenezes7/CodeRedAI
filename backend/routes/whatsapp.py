@@ -21,9 +21,11 @@ from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
 
 try:
-    from ..services.emergency_service import create_emergency, dispatch_ambulance, save_to_db
+    from ..services.emergency_service import create_emergency, save_to_db
+    from ..services.hospital_service import find_nearest_hospitals, notify_hospitals
 except ImportError:
-    from services.emergency_service import create_emergency, dispatch_ambulance, save_to_db
+    from services.emergency_service import create_emergency, save_to_db
+    from services.hospital_service import find_nearest_hospitals, notify_hospitals
 
 _logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -209,51 +211,58 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
 
             emergency_id = save_to_db(doc)
 
-            # Dispatch ambulance (now a separate step in the new architecture)
-            ambulance = dispatch_ambulance(emergency_id) if emergency_id else None
-            if not ambulance:
-                # Fallback — build a simulated ambulance inline so the WhatsApp
-                # user always gets a confirmation even if the DB write partially failed
-                import random, string as _s
-                ambulance = {
-                    "id": "AMB-" + "".join(random.choices(_s.ascii_uppercase + _s.digits, k=6)),
-                    "driver_name": "Emergency Responder",
-                    "contact": "+91XXXXXXXXXX",
-                    "eta": f"{random.randint(5, 15)} minutes",
-                }
+            # Standard flow: Geo-search hospitals and notify them
+            lat = session.get("latitude")
+            lng = session.get("longitude")
+            
+            hospitals = []
+            if emergency_id and lat is not None and lng is not None:
+                hospitals = find_nearest_hospitals(lat, lng)
+                notify_hospitals(emergency_id, hospitals)
 
             emoji = _EMERGENCY_EMOJI.get(emergency_type, "⚠️")
             label = _EMERGENCY_LABEL.get(emergency_type, "Emergency")
 
-            # Compose the confirmation message
-            confirmation = (
-                f"🚑 *AMBULANCE DISPATCHED!*\n"
-                f"{'─' * 28}\n"
-                f"{emoji} Emergency: *{label}*\n"
-                f"📍 Location: {session.get('address', 'Unknown')}\n"
-                f"{'─' * 28}\n"
-                f"🆔 Ambulance: {ambulance['id']}\n"
-                f"👨‍⚕️ Driver: {ambulance['driver_name']}\n"
-                f"📞 Contact: {ambulance['contact']}\n"
-                f"⏱ ETA: *{ambulance['eta']}*\n"
-                f"{'─' * 28}\n"
-            )
-
-            if emergency_id:
-                confirmation += f"📋 Case ID: {emergency_id[:12]}…\n"
-
-            confirmation += (
-                "\n✅ *Stay calm and stay on the line.*\n"
-                "The driver has been notified of your location.\n\n"
-                "_Send *emergency* to report a new incident._"
-            )
+            if hospitals:
+                confirmation = (
+                    f"🚨 *EMERGENCY RECORDED!*\n"
+                    f"{'─' * 28}\n"
+                    f"{emoji} Emergency: *{label}*\n"
+                    f"📍 Location: {session.get('address', 'Unknown')}\n"
+                    f"🏥 Nearby Hospitals Notified: *{len(hospitals)}*\n"
+                    f"{'─' * 28}\n"
+                )
+                if emergency_id:
+                    confirmation += f"📋 Case ID: {emergency_id[:12]}…\n\n"
+                
+                confirmation += (
+                    "✅ *We have alerted the nearest hospitals.*\n"
+                    "Please stay calm. An ambulance will be dispatched to your location the moment a hospital confirms availability.\n\n"
+                    "_Send *emergency* to report a new incident._"
+                )
+            else:
+                confirmation = (
+                    f"🚨 *EMERGENCY RECORDED!*\n"
+                    f"{'─' * 28}\n"
+                    f"{emoji} Emergency: *{label}*\n"
+                    f"📍 Location: {session.get('address', 'Unknown')}\n"
+                    f"{'─' * 28}\n"
+                )
+                if emergency_id:
+                    confirmation += f"📋 Case ID: {emergency_id[:12]}…\n\n"
+                
+                confirmation += (
+                    "⚠️ *Notice:* No active hospital was found within 5 km of your location.\n"
+                    "Our central dispatch team has been flagged and is attempting manual routing. Standard emergency services should also be contacted.\n\n"
+                    "_Send *emergency* to report a new incident._"
+                )
 
             # Clear session after successful dispatch
             del _sessions[phone_number]
 
             _logger.info(
-                "Emergency dispatched | phone=%s | type=%s | ambulance=%s | db_id=%s",
-                phone_number, emergency_type, ambulance["id"], emergency_id,
+                "Emergency recorded | phone=%s | type=%s | notified_count=%d | db_id=%s",
+                phone_number, emergency_type, len(hospitals), emergency_id,
             )
 
             return _twiml_response(confirmation)
