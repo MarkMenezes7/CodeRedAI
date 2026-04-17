@@ -22,7 +22,6 @@ import {
   Navigation,
 } from 'lucide-react';
 
-import { DriverAuthPage } from '@modules/driver/pages/DriverAuthPage';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { DRIVER_MISSIONS } from '../mockDriverData';
@@ -138,7 +137,10 @@ export function DriverSettings() {
 
   // Auth guard
   if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   const linkedHospitalName = DRIVER_MISSIONS[0]?.dropHospitalName ?? 'Karuna Hospital';

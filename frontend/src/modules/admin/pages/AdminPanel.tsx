@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 
 import { StatusBadge } from '@shared/components/StatusBadge';
 import { formatDate } from '@shared/utils/formatters';
-import { AdminAuthPage, type AdminAuthState, type AdminSession } from '@modules/admin/pages/AdminAuthPage';
 import { AdminSidebar } from '@modules/admin/components/AdminSidebar';
 import './AdminPanel.css';
 
@@ -66,6 +65,19 @@ interface AdminActivity {
   at: string;
   message: string;
   type: 'verification' | 'review' | 'compliance' | 'system';
+}
+
+interface AdminSession {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  lastLoginAt: string;
+}
+
+interface AdminAuthState {
+  token: string;
+  user: AdminSession;
 }
 
 interface DocumentDefinition {
@@ -974,24 +986,19 @@ export function AdminPanel() {
     setSelectedHospitalId(null);
   };
 
-  const handleAuthenticated = (session: AdminAuthState) => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-    }
-    setAdminAuth(session);
-    setAdminNotice(`Welcome back ${session.user.name}. Verification systems are now live.`);
-    addActivity(`${session.user.name} signed into admin control tower.`, 'system');
-  };
-
   const handleLogout = () => {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(STORAGE_KEY);
+      window.location.hash = '/auth';
     }
     setAdminAuth(null);
   };
 
   if (!adminAuth) {
-    return <AdminAuthPage onAuthenticated={handleAuthenticated} />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   const adminSession = adminAuth.user;

@@ -3,7 +3,6 @@ import Map, { Layer, Marker, NavigationControl, Source, type LayerProps } from '
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 import { useHospitalAuth } from '@shared/providers/AuthContext';
-import { DriverAuthPage } from './DriverAuthPage';
 import { DriverLayout } from './DriverLayout';
 import { resolveDriverUnitId } from '../utils/driverIdentity';
 import type {
@@ -1363,7 +1362,10 @@ export function DriverDashboard() {
       : 'Driver must be en route to patient to pick up';
 
   if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   const missionActive = Boolean(

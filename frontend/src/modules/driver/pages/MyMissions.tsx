@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 
 import { StatusBadge } from '@shared/components/StatusBadge';
-import { DriverAuthPage } from '@modules/driver/pages/DriverAuthPage';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { DRIVER_MISSIONS, type DriverMissionRecord } from '../mockDriverData';
@@ -468,7 +467,12 @@ export function MyMissions() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  if (!isDriverAuthenticated || !driverUser) return <DriverAuthPage />;
+  if (!isDriverAuthenticated || !driverUser) {
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
+  }
 
   /* ── Derived data ── */
   const allMissions = DRIVER_MISSIONS;

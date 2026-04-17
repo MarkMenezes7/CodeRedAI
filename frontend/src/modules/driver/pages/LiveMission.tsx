@@ -16,7 +16,6 @@ import { useDriverSimulation } from '@/hooks/useDriverSimulation';
 import { useVoiceNavigation } from '@/hooks/useVoiceNavigation';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import type { DriverStatus, HospitalOpsState, PatientRequest } from '@shared/types/hospitalOps.types';
-import { DriverAuthPage } from './DriverAuthPage';
 import { DriverLayout } from './DriverLayout';
 import { resolveDriverUnitId } from '../utils/driverIdentity';
 
@@ -1614,7 +1613,10 @@ export function LiveMission() {
   const showDispatchOffers = apiPendingOffers.length > 0 && !apiActiveMission;
 
   if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   if (!hasMission) {

@@ -18,7 +18,6 @@ import { MapView } from '@shared/components/MapView';
 import { StatusBadge } from '@shared/components/StatusBadge';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { getPresetDriverAccounts, type PresetDriverAccount } from '@shared/utils/driverAuthApi';
-import { HospitalAuthPage } from './HospitalAuthPage';
 import {
   DriverStatus,
   DriverUnit,
@@ -819,7 +818,10 @@ export function HospitalDashboard() {
   }, []);
 
   if (!isHospitalAuthenticated || !hospitalUser) {
-    return <HospitalAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   return (
