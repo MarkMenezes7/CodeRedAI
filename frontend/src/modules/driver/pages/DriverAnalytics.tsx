@@ -37,7 +37,6 @@ import {
 } from 'recharts';
 
 import { StatusBadge } from '@shared/components/StatusBadge';
-import { DriverAuthPage } from '@modules/driver/pages/DriverAuthPage';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import {
@@ -117,7 +116,7 @@ function CustomTooltipPie({ active, payload }: any) {
 function MissionChart({ data, activeBar, onBarHover }: MissionChartProps) {
   return (
     <div className="da-chart-container">
-      <ResponsiveContainer>
+      <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
         <BarChart
           data={data}
           margin={{ top: 8, right: 10, bottom: 0, left: -18 }}
@@ -364,7 +363,10 @@ export function DriverAnalytics() {
   }, [filteredMissions]);
 
   if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   return (
@@ -622,7 +624,7 @@ export function DriverAnalytics() {
               </div>
             </div>
             <div className="da-chart-container">
-              <ResponsiveContainer>
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
                 <AreaChart
                   data={RESPONSE_TIME_TREND}
                   margin={{ top: 8, right: 10, bottom: 0, left: -18 }}
@@ -671,7 +673,7 @@ export function DriverAnalytics() {
             </div>
             <div className="da-chart-container da-pie-container">
               <div className="da-pie-chart-wrap">
-                <ResponsiveContainer>
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={220}>
                   <PieChart>
                     <Pie
                       data={statusBreakdown}

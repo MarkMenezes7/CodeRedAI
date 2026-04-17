@@ -11,6 +11,7 @@ try:
     from .routes.car_accident import router as car_accident_router
     from .routes.emergency import router as emergency_router
     from .routes.whatsapp import router as whatsapp_router
+    from .routes.driver_ops import router as driver_ops_router
     from .services.auth_service import seed_default_admins
 except ImportError:  # pragma: no cover - compatibility for `uvicorn main:app`
     from database import init_indexes_safe
@@ -18,6 +19,7 @@ except ImportError:  # pragma: no cover - compatibility for `uvicorn main:app`
     from routes.car_accident import router as car_accident_router
     from routes.emergency import router as emergency_router
     from routes.whatsapp import router as whatsapp_router
+    from routes.driver_ops import router as driver_ops_router
     from services.auth_service import seed_default_admins
 
 _logger = logging.getLogger(__name__)
@@ -43,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(car_accident_router, prefix="/api", tags=["car-accidents"])
     app.include_router(emergency_router, prefix="/api", tags=["emergency"])
     app.include_router(whatsapp_router, prefix="/api", tags=["whatsapp"])
+    app.include_router(driver_ops_router, prefix="/api", tags=["driver_ops"])
 
     @app.on_event("startup")
     def _startup() -> None:

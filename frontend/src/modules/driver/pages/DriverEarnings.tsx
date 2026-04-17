@@ -38,7 +38,6 @@ import {
 } from 'recharts';
 
 import { StatusBadge } from '@modules/shared/components/StatusBadge';
-import { DriverAuthPage } from '@modules/driver/pages/DriverAuthPage';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import {
@@ -147,7 +146,10 @@ export function DriverEarnings() {
   const rowsPerPage = 5;
 
   if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   const completedMissions = useMemo(

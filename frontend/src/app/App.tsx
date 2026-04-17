@@ -29,12 +29,32 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const matchedRoute = routes.find((route) => route.path === currentPath);
+    if (!matchedRoute?.redirectTo) {
+      return;
+    }
+
+    if (matchedRoute.redirectTo !== currentPath) {
+      window.location.hash = matchedRoute.redirectTo;
+    }
+  }, [currentPath]);
+
   const activeRoute = routes.find((route) => route.path === currentPath) ?? routes[0];
+
+  if (activeRoute.redirectTo) {
+    return (
+      <div className="app-shell">
+        <AppNavbar />
+      </div>
+    );
+  }
+
   const ActivePage = activeRoute.element;
 
   return (
     <div className="app-shell">
-      <AppNavbar currentPath={activeRoute.path} />
+      <AppNavbar />
       <ActivePage />
     </div>
   );

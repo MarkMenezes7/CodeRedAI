@@ -14,7 +14,9 @@ would persist this in Redis so it survives restarts.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
@@ -23,9 +25,11 @@ from twilio.twiml.messaging_response import MessagingResponse
 try:
     from ..services.emergency_service import create_emergency, save_to_db
     from ..services.hospital_service import find_nearest_hospitals, notify_hospitals
+    from ..services.driver_service import find_nearest_drivers, create_driver_offers
 except ImportError:
     from services.emergency_service import create_emergency, save_to_db
     from services.hospital_service import find_nearest_hospitals, notify_hospitals
+    from services.driver_service import find_nearest_drivers, create_driver_offers
 
 _logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -91,14 +95,27 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
     with TwiML.
     """
     try:
-        form = await request.form()
+        content_type = (request.headers.get("content-type") or "").lower()
+        raw_body: str = ""
+        phone_number: str = ""
+        latitude_raw = None
+        longitude_raw = None
 
-        raw_body: str = (form.get("Body") or "").strip()
-        phone_number: str = (form.get("From") or "").strip()
+        # Twilio sends application/x-www-form-urlencoded by default.
+        # Parse this path manually so the webhook works without python-multipart.
+        if "application/x-www-form-urlencoded" in content_type:
+            payload = parse_qs((await request.body()).decode("utf-8", errors="ignore"), keep_blank_values=True)
 
-        # Twilio may send GPS coordinates in separate fields
-        latitude_raw = form.get("Latitude")
-        longitude_raw = form.get("Longitude")
+            raw_body = (payload.get("Body", [""])[0] or "").strip()
+            phone_number = (payload.get("From", [""])[0] or "").strip()
+            latitude_raw = payload.get("Latitude", [None])[0]
+            longitude_raw = payload.get("Longitude", [None])[0]
+        else:
+            form = await request.form()
+            raw_body = (form.get("Body") or "").strip()
+            phone_number = (form.get("From") or "").strip()
+            latitude_raw = form.get("Latitude")
+            longitude_raw = form.get("Longitude")
 
         _logger.info("Webhook hit | from=%s | body=%r", phone_number, raw_body)
 
@@ -159,6 +176,21 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
                     lat, lon, address = None, None, raw_body
             else:
                 lat, lon = None, None
+
+                # Support manual coordinate input like: 19.0760, 72.8777
+                coordinate_match = re.search(
+                    r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)",
+                    raw_body,
+                )
+                if coordinate_match:
+                    try:
+                        parsed_lat = float(coordinate_match.group(1))
+                        parsed_lon = float(coordinate_match.group(2))
+                        if -90 <= parsed_lat <= 90 and -180 <= parsed_lon <= 180:
+                            lat, lon = parsed_lat, parsed_lon
+                    except ValueError:
+                        lat, lon = None, None
+
                 address = raw_body if raw_body else "Location not provided"
 
             session["latitude"] = lat
@@ -211,33 +243,45 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
 
             emergency_id = save_to_db(doc)
 
-            # Standard flow: Geo-search hospitals and notify them
+            # Standard flow: Geo-search hospitals AND drivers simultaneously
             lat = session.get("latitude")
             lng = session.get("longitude")
             
             hospitals = []
-            if emergency_id and lat is not None and lng is not None:
-                hospitals = find_nearest_hospitals(lat, lng)
-                notify_hospitals(emergency_id, hospitals)
+            drivers = []
+            if emergency_id:
+                if lat is not None and lng is not None:
+                    # Parallel branch 1: Hospitals
+                    hospitals = find_nearest_hospitals(lat, lng)
+                    notify_hospitals(emergency_id, hospitals)
+
+                    # Parallel branch 2: Drivers near the emergency
+                    drivers = find_nearest_drivers(lat, lng)
+                else:
+                    # Location unavailable: still notify recently active drivers.
+                    drivers = find_nearest_drivers(0.0, 0.0)
+
+                create_driver_offers(emergency_id, drivers)
 
             emoji = _EMERGENCY_EMOJI.get(emergency_type, "⚠️")
             label = _EMERGENCY_LABEL.get(emergency_type, "Emergency")
 
-            if hospitals:
+            if hospitals or drivers:
                 confirmation = (
                     f"🚨 *EMERGENCY RECORDED!*\n"
                     f"{'─' * 28}\n"
                     f"{emoji} Emergency: *{label}*\n"
                     f"📍 Location: {session.get('address', 'Unknown')}\n"
-                    f"🏥 Nearby Hospitals Notified: *{len(hospitals)}*\n"
+                    f"🏥 Hospitals Notified: *{len(hospitals)}*\n"
+                    f"🚑 Drivers Notified: *{len(drivers)}*\n"
                     f"{'─' * 28}\n"
                 )
                 if emergency_id:
                     confirmation += f"📋 Case ID: {emergency_id[:12]}…\n\n"
                 
                 confirmation += (
-                    "✅ *We have alerted the nearest hospitals.*\n"
-                    "Please stay calm. An ambulance will be dispatched to your location the moment a hospital confirms availability.\n\n"
+                    "✅ *We have alerted the nearest hospitals and drivers.*\n"
+                    "Please stay calm. An ambulance will be dispatched to your location the moment a driver accepts.\n\n"
                     "_Send *emergency* to report a new incident._"
                 )
             else:
@@ -252,7 +296,7 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
                     confirmation += f"📋 Case ID: {emergency_id[:12]}…\n\n"
                 
                 confirmation += (
-                    "⚠️ *Notice:* No active hospital was found within 5 km of your location.\n"
+                    "⚠️ *Notice:* No active hospitals or drivers were found within 5 km of your location.\n"
                     "Our central dispatch team has been flagged and is attempting manual routing. Standard emergency services should also be contacted.\n\n"
                     "_Send *emergency* to report a new incident._"
                 )
@@ -261,8 +305,8 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
             del _sessions[phone_number]
 
             _logger.info(
-                "Emergency recorded | phone=%s | type=%s | notified_count=%d | db_id=%s",
-                phone_number, emergency_type, len(hospitals), emergency_id,
+                "Emergency recorded | phone=%s | type=%s | hospitals=%d | drivers=%d | db_id=%s",
+                phone_number, emergency_type, len(hospitals), len(drivers), emergency_id,
             )
 
             return _twiml_response(confirmation)

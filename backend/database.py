@@ -82,9 +82,19 @@ def init_indexes() -> None:
     get_hospitals_collection().create_index("hospital_id", unique=True, sparse=True)
     _logger.info("Unique index ensured on hospitals.hospital_id")
 
+    # Driver geospatial index — required for nearest-driver queries
+    get_drivers_collection().create_index([("location", GEOSPHERE)], name="driver_location_2dsphere")
+    _logger.info("2dsphere index ensured on drivers.location")
+
+    # Driver status index — for filtering online/available drivers
+    get_drivers_collection().create_index("dispatch_status", name="driver_dispatch_status")
+    _logger.info("Index ensured on drivers.dispatch_status")
+
     # emergencies indexes
     get_emergencies_collection().create_index("phone_number")
     get_emergencies_collection().create_index("hospital_status")
+    get_emergencies_collection().create_index("status")
+    get_emergencies_collection().create_index("assigned_driver_id", sparse=True)
     get_emergencies_collection().create_index("created_at")
 
     # car accident alert indexes

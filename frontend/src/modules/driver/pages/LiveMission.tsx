@@ -17,7 +17,6 @@ import { listCarAccidentAlerts } from '@shared/utils/carAccidentApi';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import type { DispatchOffer, DriverStatus, HospitalOpsState, PatientRequest } from '@shared/types/hospitalOps.types';
 import { buildRoadRoute, fetchRoadRouteFromApi, routeDistanceKm } from '@shared/utils/hospitalOpsSimulator';
-import { DriverAuthPage } from './DriverAuthPage';
 import { DriverLayout } from './DriverLayout';
 import { resolveDriverUnitId } from '../utils/driverIdentity';
 
@@ -1930,7 +1929,10 @@ export function LiveMission() {
   const showDoneButton = arrivalOverlayVisible && Boolean(activeRequest && selectedDriver);
 
   if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
+    if (typeof window !== 'undefined') {
+      window.location.hash = '/auth';
+    }
+    return null;
   }
 
   if (!hasMission) {
