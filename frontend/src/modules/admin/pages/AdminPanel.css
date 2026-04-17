@@ -1,7 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
 
 .admin-panel {
-  --admin-bg: #f6f7fa;
+  --admin-bg: #f3f5f8;
   --admin-surface: #ffffff;
   --admin-border: #ccd4df;
   --admin-border-strong: #a7b4c4;
@@ -18,18 +18,32 @@
 
   font-family: 'Manrope', 'Segoe UI', sans-serif;
   min-height: 100vh;
-  padding: 22px 20px 36px;
-  background: linear-gradient(180deg, #f7f8fb 0%, #f3f5f8 100%);
+  background: linear-gradient(180deg, #f8f9fb 0%, #f4f6f9 48%, #f1f3f7 100%);
   color: var(--admin-text);
+}
+
+.admin-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.admin-main-column {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 18px 34px;
 }
 
 .admin-header,
 .admin-kpi-grid,
 .admin-layout,
-.admin-workspace-layout,
+.admin-content,
 .admin-notice {
-  width: min(1520px, 100%);
+  width: min(1540px, 100%);
   margin: 0 auto;
+}
+
+.admin-content {
+  margin-top: 12px;
 }
 
 .admin-workspace-layout {
@@ -1291,7 +1305,7 @@
 }
 
 @media (max-width: 1020px) {
-  .admin-panel {
+  .admin-main-column {
     padding: 16px 12px 24px;
   }
 
@@ -1312,12 +1326,8 @@
     grid-template-columns: 1fr;
   }
 
-  .admin-workspace-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .admin-sidebar {
-    position: static;
+  .admin-shell {
+    display: block;
   }
 }
 

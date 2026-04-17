@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { StatusBadge } from '@shared/components/StatusBadge';
 import { formatDate } from '@shared/utils/formatters';
 import { AdminAuthPage, type AdminAuthState, type AdminSession } from '@modules/admin/pages/AdminAuthPage';
+import { AdminSidebar } from '@modules/admin/components/AdminSidebar';
 import './AdminPanel.css';
 
 type VerificationStatus = 'pending' | 'verified' | 'needs_review' | 'rejected';
@@ -480,14 +481,6 @@ const severityTone: Record<ReviewSeverity, 'info' | 'warning' | 'danger'> = {
   low: 'info',
   medium: 'warning',
   high: 'danger',
-};
-
-const sectionLabel: Record<AdminSectionKey, string> = {
-  overview: 'Overview',
-  verification: 'Hospital Verification',
-  reviews: 'Reviews',
-  compliance: 'Compliance',
-  ops: 'Ops Feed',
 };
 
 const overviewRangeLabel: Record<OverviewRange, string> = {
@@ -1601,60 +1594,51 @@ export function AdminPanel() {
 
   return (
     <main className="admin-panel">
-      <section className="admin-header">
-        <div className="admin-header-copy">
-          <p className="admin-eyebrow">CodeRed Control Tower</p>
-          <h1>Admin Verification Dashboard</h1>
-          <p>
-            Hospital verification in CodeRed AI is aligned to real-world healthcare compliance standards. The admin
-            validates registration certificates, clinical licenses, infrastructure details, and optional NABH
-            accreditation before hospitals receive emergency cases.
-          </p>
+      <div className="admin-shell">
+        <AdminSidebar
+          activeSection={activeSection}
+          onSelectSection={setActiveSection}
+          counts={{
+            verification: metrics.pendingHospitals + metrics.reviewHospitals,
+            reviews: metrics.openReviews,
+            compliance: flaggedHospitals.length,
+          }}
+          adminEmail={adminSession.email}
+          lastLoginLabel={formatDate(adminSession.lastLoginAt)}
+        />
+
+        <div className="admin-main-column">
+          <section className="admin-header">
+            <div className="admin-header-copy">
+              <p className="admin-eyebrow">CodeRed Control Tower</p>
+              <h1>Admin Verification Dashboard</h1>
+              <p>
+                Hospital verification in CodeRed AI is aligned to real-world healthcare compliance standards. The admin
+                validates registration certificates, clinical licenses, infrastructure details, and optional NABH
+                accreditation before hospitals receive emergency cases.
+              </p>
+            </div>
+
+            <div className="admin-header-side">
+              <StatusBadge label="Live Oversight" tone="success" />
+              <p>
+                {adminSession.name} • {adminSession.role}
+              </p>
+              <button type="button" className="admin-btn" onClick={handleLogout}>
+                Logout
+              </button>
+            </div>
+          </section>
+
+          {adminNotice ? (
+            <section className="admin-notice" role="status" aria-live="polite">
+              <strong>Update:</strong> {adminNotice}
+            </section>
+          ) : null}
+
+          <section className="admin-content">{sectionRenderer[activeSection]()}</section>
         </div>
-
-        <div className="admin-header-side">
-          <StatusBadge label="Live Oversight" tone="success" />
-          <p>
-            {adminSession.name} • {adminSession.role}
-          </p>
-          <button type="button" className="admin-btn" onClick={handleLogout}>
-            Logout
-          </button>
-        </div>
-      </section>
-
-      {adminNotice ? (
-        <section className="admin-notice" role="status" aria-live="polite">
-          <strong>Update:</strong> {adminNotice}
-        </section>
-      ) : null}
-
-      <section className="admin-workspace-layout">
-        <aside className="admin-sidebar" aria-label="Admin navigation">
-          <p className="admin-sidebar-title">Sections</p>
-          {(['overview', 'verification', 'reviews', 'compliance', 'ops'] as AdminSectionKey[]).map((sectionKey) => (
-            <button
-              key={sectionKey}
-              type="button"
-              className={activeSection === sectionKey ? 'admin-nav-btn active' : 'admin-nav-btn'}
-              onClick={() => setActiveSection(sectionKey)}
-            >
-              <span>{sectionLabel[sectionKey]}</span>
-              {sectionKey === 'verification' ? <strong>{metrics.pendingHospitals + metrics.reviewHospitals}</strong> : null}
-              {sectionKey === 'reviews' ? <strong>{metrics.openReviews}</strong> : null}
-              {sectionKey === 'compliance' ? <strong>{flaggedHospitals.length}</strong> : null}
-            </button>
-          ))}
-
-          <div className="admin-sidebar-foot">
-            <p>Signed in as</p>
-            <strong>{adminSession.email}</strong>
-            <span>Last login: {formatDate(adminSession.lastLoginAt)}</span>
-          </div>
-        </aside>
-
-        <div className="admin-content">{sectionRenderer[activeSection]()}</div>
-      </section>
+      </div>
     </main>
   );
 }

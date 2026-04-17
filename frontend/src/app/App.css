@@ -1,4 +1,17 @@
 .app-shell {
   min-height: 100vh;
+  padding-top: 66px;
   background: linear-gradient(180deg, #f9fcff 0%, #eef5fb 100%);
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    padding-top: 148px;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    padding-top: 222px;
+  }
 }
