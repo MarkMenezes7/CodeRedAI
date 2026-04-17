@@ -4,6 +4,8 @@ export interface HospitalAuthUser {
   id: string;
   name: string;
   email: string;
+  hospitalId?: string;
+  bedCapacity?: number;
   address?: string;
   location?: {
     lat: number;
@@ -26,9 +28,14 @@ interface PresetHospitalResponse {
 }
 
 export interface HospitalSignupPayload {
-  hospitalName: string;
+  hospitalId: string;
   email: string;
   password: string;
+  bedCapacity: number;
+  location: {
+    lat: number;
+    lng: number;
+  };
 }
 
 export async function loginHospital(payload: { email: string; password: string }): Promise<HospitalAuthSession> {

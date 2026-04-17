@@ -31,7 +31,9 @@ export interface DriverSignupPayload {
   driverName: string;
   email: string;
   password: string;
-  phone?: string;
+  phone: string;
+  vehicleNumber: string;
+  linkedHospitalId: string;
 }
 
 export async function loginDriver(payload: { email: string; password: string }): Promise<DriverAuthSession> {

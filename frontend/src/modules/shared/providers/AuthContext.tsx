@@ -25,7 +25,13 @@ interface AuthContextValue {
   defaultHospitalPassword: string;
   presetHospitalEmails: string[];
   loginHospitalUser: (email: string, password: string) => Promise<void>;
-  signupHospitalUser: (hospitalName: string, email: string, password: string) => Promise<void>;
+  signupHospitalUser: (
+    hospitalId: string,
+    email: string,
+    password: string,
+    location: { lat: number; lng: number },
+    bedCapacity: number,
+  ) => Promise<void>;
   logoutHospitalUser: () => void;
   driverUser: DriverAuthUser | null;
   isDriverAuthenticated: boolean;
@@ -33,7 +39,14 @@ interface AuthContextValue {
   defaultDriverPassword: string;
   presetDriverEmails: string[];
   loginDriverUser: (email: string, password: string) => Promise<void>;
-  signupDriverUser: (driverName: string, email: string, password: string) => Promise<void>;
+  signupDriverUser: (
+    driverName: string,
+    email: string,
+    password: string,
+    phone: string,
+    vehicleNumber: string,
+    linkedHospitalId: string,
+  ) => Promise<void>;
   logoutDriverUser: () => void;
 }
 
@@ -278,8 +291,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setHospitalSession(session);
   }
 
-  async function signupHospitalUser(hospitalName: string, email: string, password: string) {
-    const session = await signupHospital({ hospitalName, email, password });
+  async function signupHospitalUser(
+    hospitalId: string,
+    email: string,
+    password: string,
+    location: { lat: number; lng: number },
+    bedCapacity: number,
+  ) {
+    const session = await signupHospital({ hospitalId, email, password, location, bedCapacity });
     setHospitalSession(session);
   }
 
@@ -292,8 +311,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDriverSession(session);
   }
 
-  async function signupDriverUser(driverName: string, email: string, password: string) {
-    const session = await signupDriver({ driverName, email, password });
+  async function signupDriverUser(
+    driverName: string,
+    email: string,
+    password: string,
+    phone: string,
+    vehicleNumber: string,
+    linkedHospitalId: string,
+  ) {
+    const session = await signupDriver({
+      driverName,
+      email,
+      password,
+      phone,
+      vehicleNumber,
+      linkedHospitalId,
+    });
     setDriverSession(session);
   }
 

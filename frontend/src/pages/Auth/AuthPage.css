@@ -47,7 +47,7 @@
 .auth-page-role-switch,
 .auth-page-mode-switch {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   padding: 6px;
   border-radius: 12px;
@@ -118,6 +118,45 @@
   outline: none;
   border-color: #d72b2b;
   box-shadow: 0 0 0 3px rgba(215, 43, 43, 0.16);
+}
+
+.auth-page-map-field {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #d5dce8;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.auth-page-map-field p {
+  margin: 0;
+  color: #1f2834;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.auth-page-map-shell {
+  height: 220px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #cad6e6;
+}
+
+.auth-page-map-warning {
+  color: #8a3a19;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: #fff3e8;
+  border: 1px solid #f1d0b4;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.auth-page-map-coords {
+  font-size: 0.78rem;
+  color: #455468;
+  font-weight: 700;
 }
 
 .auth-page-password-wrap {
@@ -265,5 +304,9 @@
 
   .auth-page-chip-grid {
     grid-template-columns: 1fr;
+  }
+
+  .auth-page-map-shell {
+    height: 190px;
   }
 }

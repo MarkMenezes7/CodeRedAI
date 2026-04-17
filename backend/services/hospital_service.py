@@ -48,12 +48,16 @@ def _oid(emergency_id: str) -> ObjectId:
 
 def _serialize_hospital(doc: dict[str, Any], distance_m: float | None = None) -> dict[str, Any]:
     """Return a clean, serializable hospital record for API responses."""
+    available_beds = doc.get("available_beds")
+    if available_beds is None:
+        available_beds = doc.get("bed_capacity", 0)
+
     return {
         "hospital_id": doc.get("hospital_id") or str(doc["_id"]),
         "name": doc.get("name", "Unknown Hospital"),
         "address": doc.get("address", ""),
-        "contact": doc.get("contact", ""),
-        "available_beds": doc.get("available_beds", 0),
+        "available_beds": available_beds,
+        "bed_capacity": doc.get("bed_capacity", available_beds),
         "distance_m": round(distance_m, 1) if distance_m is not None else None,
     }
 
@@ -99,7 +103,10 @@ def find_nearest_hospitals(
             }
         },
         "status": "active",
-        "available_beds": {"$gt": 0},
+        "$or": [
+            {"available_beds": {"$gt": 0}},
+            {"bed_capacity": {"$gt": 0}},
+        ],
     }
 
     try:
