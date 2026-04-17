@@ -8,11 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 try:
     from .database import init_indexes_safe
     from .routes.auth import router as auth_router
+    from .routes.emergency import router as emergency_router
     from .routes.whatsapp import router as whatsapp_router
     from .services.auth_service import seed_default_admins
 except ImportError:  # pragma: no cover - compatibility for `uvicorn main:app`
     from database import init_indexes_safe
     from routes.auth import router as auth_router
+    from routes.emergency import router as emergency_router
     from routes.whatsapp import router as whatsapp_router
     from services.auth_service import seed_default_admins
 
@@ -36,6 +38,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(auth_router, prefix="/api", tags=["auth"])
+    app.include_router(emergency_router, prefix="/api", tags=["emergency"])
     app.include_router(whatsapp_router, prefix="/api", tags=["whatsapp"])
 
     @app.on_event("startup")

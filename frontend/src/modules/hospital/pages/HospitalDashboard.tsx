@@ -1,4 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  LayoutDashboard,
+  Menu,
+  Radio,
+  ShieldCheck,
+  Truck,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 
 import { AlertBanner } from '@shared/components/AlertBanner';
 import { MapView } from '@shared/components/MapView';
@@ -29,6 +40,22 @@ import './HospitalDashboard.css';
 const STORAGE_KEY_PREFIX = 'codered-hospital-demo-v3';
 const DRIVER_PING_SECONDS = 5;
 const AUTO_INTAKE_SECONDS = 42;
+const MOBILE_NAV_QUERY = '(max-width: 980px)';
+
+type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds';
+
+const hospitalSections: Array<{ key: HospitalSectionKey; label: string; description: string; icon: LucideIcon }> = [
+  { key: 'dashboard',  label: 'Dashboard',            description: 'Analytics and live hospital overview',           icon: LayoutDashboard },
+  { key: 'queue',      label: 'Patient Queue',         description: 'Queue, live map, and dispatch control',          icon: Radio },
+  { key: 'ambulance',  label: 'Ambulance Dashboard',   description: 'Ambulance and driver operational status',        icon: Truck },
+  { key: 'beds',       label: 'Bed Manager',           description: 'Bed and ICU capacity controls',                  icon: ShieldCheck },
+];
+
+function isMobileViewport() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia(MOBILE_NAV_QUERY).matches;
+}
+
 
 const severityPriority: Record<SeverityLevel, number> = {
   critical: 4,
@@ -271,6 +298,9 @@ export function HospitalDashboard() {
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [requestFilter, setRequestFilter] = useState<'all' | RequestStatus>('all');
+  const [activeSection, setActiveSection] = useState<HospitalSectionKey>('dashboard');
+  const [isDesktopNavOpen, setIsDesktopNavOpen] = useState(true);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [dispatchNotice, setDispatchNotice] = useState<string | null>(null);
   const [closestSuggestion, setClosestSuggestion] = useState<ClosestDriverSuggestion | null>(null);
   const [isResolvingRoute, setIsResolvingRoute] = useState(false);
@@ -284,6 +314,7 @@ export function HospitalDashboard() {
     setSelectedRequestId(null);
     setSelectedDriverId(null);
     setRequestFilter('all');
+    setActiveSection('dashboard');
     setClosestSuggestion(null);
     setDispatchNotice(null);
   }, [activeHospitalRef, hospitalUser]);
@@ -412,6 +443,20 @@ export function HospitalDashboard() {
       ? 0
       : opsState.hospital.beds.occupiedBeds / opsState.hospital.beds.totalBeds;
   const criticalCases = openRequests.filter((r) => r.severity === 'critical').length;
+  const completedCases = opsState.requests.filter((r) => r.status === 'completed').length;
+  const completionRate = opsState.requests.length === 0 ? 0 : Math.round((completedCases / opsState.requests.length) * 100);
+  const lowFuelDrivers = linkedDrivers.filter((d) => d.fuelPct <= 25).length;
+  const offlineDrivers = linkedDrivers.filter((d) => d.status === 'offline').length;
+  const averageFuelPct = linkedDrivers.length === 0 ? 0 : Math.round(linkedDrivers.reduce((t, d) => t + d.fuelPct, 0) / linkedDrivers.length);
+  const availableFleetPct = linkedDrivers.length === 0 ? 0 : Math.round((availableDrivers.length / linkedDrivers.length) * 100);
+  const bedOccupancyPct = opsState.hospital.beds.totalBeds === 0 ? 0 : Math.round((opsState.hospital.beds.occupiedBeds / opsState.hospital.beds.totalBeds) * 100);
+  const responseVelocityScore = avgEtaMinutes > 0 ? Math.max(0, 100 - avgEtaMinutes * 3) : 100;
+  const dispatchReadinessScore = Math.max(0, Math.min(100, Math.round(availableFleetPct * 0.42 + (100 - bedOccupancyPct) * 0.26 + completionRate * 0.2 + responseVelocityScore * 0.12)));
+  const scoreRingCircumference = 2 * Math.PI * 52;
+  const miniRingCircumference = 2 * Math.PI * 30;
+  const recentPriorityRequests = useMemo(() => [...openRequests].sort((a, b) => { const sd = (severityPriority[b.severity] ?? 0) - (severityPriority[a.severity] ?? 0); return sd !== 0 ? sd : new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime(); }).slice(0, 5), [openRequests]);
+  const capacityEvents = useMemo(() => opsState.events.filter((e) => e.type === 'capacity'), [opsState.events]);
+  const activeSectionMeta = useMemo(() => hospitalSections.find((s) => s.key === activeSection) ?? hospitalSections[0]!, [activeSection]);
 
   const handleSimulateIncoming = () => {
     setOpsState((prev) => addIncomingPatientRequest(prev));
@@ -473,7 +518,7 @@ export function HospitalDashboard() {
       setSelectedRequestId(requestId);
       setSelectedDriverId(driverId);
       setClosestSuggestion(null);
-      setDispatchNotice(`${mode === 'auto' ? 'Auto-dispatched' : 'Dispatched'} ${driver.callSign} → ${request.id}.`);
+      setDispatchNotice(`${mode === 'auto' ? 'Auto-dispatched' : 'Dispatched'} ${driver.callSign} â†’ ${request.id}.`);
     } finally {
       setIsResolvingRoute(false);
     }
@@ -556,363 +601,511 @@ export function HospitalDashboard() {
     });
   };
 
+  const handleSectionChange = (section: HospitalSectionKey) => {
+    setActiveSection(section);
+    if (isMobileViewport()) setIsMobileNavOpen(false);
+  };
+
+  const handleSidebarToggle = () => {
+    if (isMobileViewport()) { setIsMobileNavOpen((prev) => !prev); return; }
+    setIsDesktopNavOpen((prev) => !prev);
+  };
+
+  // Close mobile nav on viewport resize to desktop
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia(MOBILE_NAV_QUERY);
+    const handler = (e: MediaQueryListEvent) => { if (!e.matches) setIsMobileNavOpen(false); };
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', handler);
+      return () => media.removeEventListener('change', handler);
+    }
+    media.addListener(handler);
+    return () => media.removeListener(handler);
+  }, []);
+
   if (!isHospitalAuthenticated || !hospitalUser) {
     return <HospitalAuthPage />;
   }
 
   return (
-    <main className="hospital-dashboard">
-      {/* ── Header ── */}
-      <header className="hospital-head">
-        <div className="hospital-head-copy">
-          <p className="hospital-eyebrow">Hospital Operations Console</p>
-          <h1>{opsState.hospital.name}</h1>
-          <p>
-            Live demo — real-time request intake, GPS ping simulation, fleet linkage and dispatch flow.
-          </p>
-          <p className="hospital-auth-meta">
-            Signed in as {hospitalUser.email}
-          </p>
-          <div className="hospital-live-meta">
-            <span className="live-pill">Live · pings every {DRIVER_PING_SECONDS}s</span>
-            <span className="hospital-timestamp">Last tick {formatDate(opsState.lastSimulationAt)}</span>
+    <main className={`hospital-dashboard${isDesktopNavOpen ? ' desktop-nav-open' : ''}${isMobileNavOpen ? ' mobile-nav-open' : ''}`}>
+
+      {/* â”€â”€ Sidebar â”€â”€ */}
+      <aside className={`hospital-sidebar${isMobileNavOpen ? ' is-open' : ''}`} aria-label="Hospital dashboard sections">
+        <div className="hospital-sidebar-brand">
+          <span className="hospital-sidebar-brand-mark" aria-hidden="true">CR</span>
+          <div className="hospital-sidebar-brand-copy">
+            <strong>Hospital Panel</strong>
+            <span>CodeRed Navigation</span>
           </div>
         </div>
 
-        <div className="hospital-head-actions">
-          <button type="button" className="btn btn-secondary" onClick={handleSimulateIncoming}>
-            + Simulate Request
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={handleResetDemo}>
-            Reset Demo
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={logoutHospitalUser}>
-            Logout
-          </button>
-        </div>
-      </header>
-
-      {/* ── Alerts ── */}
-      <div className="alert-stack">
-        {bedPressure >= 0.9 && (
-          <AlertBanner
-            tone="danger"
-            title="Bed occupancy critical"
-            message="Capacity crossed 90%. Consider releasing beds or rerouting intake."
-            actionLabel="Release 1 Bed"
-            onAction={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')}
-          />
-        )}
-        {criticalCases > 0 && (
-          <AlertBanner
-            tone="warning"
-            title={`${criticalCases} critical case${criticalCases > 1 ? 's' : ''} in queue`}
-            message="Prioritize triage and dispatch for high-acuity patients."
-          />
-        )}
-        {dispatchNotice && <AlertBanner tone="info" title={dispatchNotice} />}
-      </div>
-
-      {/* ── KPIs ── */}
-      <section className="hospital-kpi-grid" aria-label="Operations summary">
-        <article className="kpi-card">
-          <p>Open Requests</p>
-          <strong>{openRequests.length}</strong>
-          <span>{dispatchableRequests.length} awaiting dispatch</span>
-        </article>
-        <article className="kpi-card">
-          <p>Fleet Linked</p>
-          <strong>{linkedDrivers.length}</strong>
-          <span>{availableDrivers.length} available now</span>
-        </article>
-        <article className="kpi-card">
-          <p>Active Trips</p>
-          <strong>{activeTrips}</strong>
-          <span>{avgEtaMinutes > 0 ? `Avg ETA ${avgEtaMinutes} min` : 'No active ETAs'}</span>
-        </article>
-        <article className="kpi-card">
-          <p>Beds Available</p>
-          <strong>{availableBeds}</strong>
-          <span>ICU {availableIcuBeds} / {opsState.hospital.beds.icuTotal}</span>
-        </article>
-      </section>
-
-      {/* ── Main three-column layout ── */}
-      <section className="hospital-layout">
-
-        {/* ── LEFT: Request queue ── */}
-        <section className="hospital-panel request-panel">
-          <div className="panel-head">
-            <h2>Patient Queue</h2>
-            <p>Receive, triage, and dispatch.</p>
-          </div>
-
-          <div className="request-filters" role="tablist" aria-label="Request filters">
-            {requestFilters.map((f) => (
-              <button
-                key={f.key}
-                type="button"
-                className={`filter-chip ${requestFilter === f.key ? 'active' : ''}`}
-                onClick={() => setRequestFilter(f.key)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="request-list">
-            {filteredRequests.length === 0 ? (
-              <p className="empty-state">No requests for this filter.</p>
-            ) : (
-              filteredRequests.map((request) => (
-                <article
-                  key={request.id}
-                  className={`request-card ${selectedRequestId === request.id ? 'selected' : ''}`}
-                  onClick={() => setSelectedRequestId(request.id)}
-                >
-                  <div className="request-card-head">
-                    <div>
-                      <h3>{request.id}</h3>
-                      <p>{request.patientName}, {request.age} yrs</p>
-                    </div>
-                    <div className="request-card-badges">
-                      <StatusBadge label={request.severity} tone={severityTone[request.severity]} />
-                      <StatusBadge label={requestStatusLabel[request.status]} tone={requestStatusTone[request.status]} />
-                    </div>
-                  </div>
-
-                  <p className="request-symptom">{request.symptom}</p>
-
-                  <dl className="request-meta">
-                    <div><dt>Address</dt><dd>{request.address}</dd></div>
-                    <div><dt>Channel</dt><dd>{request.channel}</dd></div>
-                    <div><dt>Reported</dt><dd>{formatDate(request.reportedAt)}</dd></div>
-                  </dl>
-
-                  <div className="request-actions" onClick={(e) => e.stopPropagation()}>
-                    {request.status === 'new' && (
-                      <button type="button" className="btn btn-secondary" onClick={() => handleTriageRequest(request.id)}>
-                        Triage
-                      </button>
-                    )}
-                    {(request.status === 'new' || request.status === 'triaged') && availableDrivers.length > 0 && (
-                      <button type="button" className="btn btn-primary" onClick={() => handleAutoDispatchNearest(request.id)}>
-                        Auto Select Closest
-                      </button>
-                    )}
-                    <button type="button" className="btn btn-ghost" onClick={() => setSelectedRequestId(request.id)}>
-                      Track
-                    </button>
-                  </div>
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-
-        {/* ── CENTER: Map + Dispatch + Fleet ── */}
-        <section className="hospital-panel map-panel">
-          <div className="panel-head">
-            <h2>Live Operations Map</h2>
-            <p>All linked drivers and active requests rendered live.</p>
-          </div>
-
-          {/* Map — prominent and tall */}
-          <div className="map-view-wrapper">
-            <MapView
-              hospital={opsState.hospital}
-              drivers={linkedDrivers}
-              requests={opsState.requests}
-              selectedDriverId={selectedDriverId}
-              selectedRequestId={selectedRequestId}
-              onSelectDriver={setSelectedDriverId}
-              onSelectRequest={setSelectedRequestId}
-              onSuggestClosestDriver={handleAutoDispatchNearest}
-              suggestedDriversByRequest={
-                closestSuggestion
-                  ? {
-                      [closestSuggestion.requestId]: `${closestSuggestion.driverCallSign} (${closestSuggestion.distanceKm.toFixed(1)} km, ${closestSuggestion.etaMinutes} min)`,
-                    }
-                  : undefined
-              }
-            />
-          </div>
-
-          {/* Dispatch console */}
-          <section className="dispatch-console" aria-label="Dispatch console">
-            <h3>Dispatch Console</h3>
-            <div className="dispatch-fields">
-              <label>
-                Request
-                <select
-                  value={selectedRequestId ?? ''}
-                  onChange={(e) => setSelectedRequestId(e.target.value || null)}
-                >
-                  <option value="">Select request…</option>
-                  {dispatchableRequests.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.id} · {r.severity.toUpperCase()} · {r.address}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Driver
-                <select
-                  value={selectedDriverId ?? ''}
-                  onChange={(e) => setSelectedDriverId(e.target.value || null)}
-                >
-                  <option value="">Select driver…</option>
-                  {availableDrivers.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.callSign} · {d.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            {closestSuggestion && selectedRequestId === closestSuggestion.requestId ? (
-              <p className="closest-driver-note">
-                Closest driver selected: <strong>{closestSuggestion.driverCallSign}</strong> ({closestSuggestion.driverName}) ·{' '}
-                {closestSuggestion.distanceKm.toFixed(1)} km · ETA {closestSuggestion.etaMinutes} min. Press{' '}
-                <strong>Dispatch Selected Pair</strong> to proceed.
-              </p>
-            ) : null}
-
+        <nav className="hospital-sidebar-nav" aria-label="Hospital controls navigation">
+          {hospitalSections.map((section) => (
             <button
+              key={section.key}
               type="button"
-              className="btn btn-primary"
-              onClick={handleDispatchSelected}
-              disabled={!selectedRequest || !selectedDriver || isResolvingRoute}
+              className={`hospital-sidebar-item${activeSection === section.key ? ' active' : ''}`}
+              onClick={() => handleSectionChange(section.key)}
+              aria-current={activeSection === section.key ? 'page' : undefined}
+              title={section.label}
             >
-              {isResolvingRoute ? 'Preparing Road Route...' : 'Dispatch Selected Pair'}
+              <span className="hospital-sidebar-item-icon" aria-hidden="true">
+                <section.icon size={18} strokeWidth={2.1} />
+                {section.key === 'queue' && criticalCases > 0 && (
+                  <span className="hospital-sidebar-item-pulse" />
+                )}
+              </span>
+              <span className="hospital-sidebar-label">{section.label}</span>
             </button>
-          </section>
+          ))}
+        </nav>
 
-          {/* Fleet roster */}
-          <section className="driver-roster" aria-label="Linked drivers">
-            <div className="panel-head compact">
-              <h3>Linked Fleet</h3>
-              <p>Status, fuel, speed and ping for every unit.</p>
+        {!isMobileViewport() && (
+          <button
+            type="button"
+            className="hospital-sidebar-collapse"
+            aria-label={isDesktopNavOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            onClick={handleSidebarToggle}
+          >
+            {isDesktopNavOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+          </button>
+        )}
+      </aside>
+
+      {/* Mobile backdrop */}
+      <button
+        type="button"
+        className="hospital-sidebar-backdrop"
+        aria-hidden={!isMobileNavOpen}
+        aria-label="Close navigation"
+        onClick={() => setIsMobileNavOpen(false)}
+      />
+
+      {/* Mobile menu toggle */}
+      {isMobileViewport() && (
+        <button
+          type="button"
+          className="hospital-mobile-menu-toggle"
+          aria-label={isMobileNavOpen ? 'Close sidebar menu' : 'Open sidebar menu'}
+          onClick={handleSidebarToggle}
+        >
+          {isMobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+        </button>
+      )}
+
+      {/* â”€â”€ Main content â”€â”€ */}
+      <div className="hospital-content">
+        <div className="hospital-content-inner">
+
+          {/* â”€â”€ Header â”€â”€ */}
+          <header className="hospital-head">
+            <div className="hospital-head-main">
+              <div className="hospital-head-icon-wrap" aria-hidden="true">
+                <activeSectionMeta.icon size={24} strokeWidth={2.1} />
+              </div>
+              <div className="hospital-head-copy">
+                <p className="hospital-eyebrow">{activeSectionMeta.label} Â· Hospital Operations Console</p>
+                <h1>{opsState.hospital.name}</h1>
+                <p>Live demo â€” real-time request intake, GPS ping simulation, fleet linkage and dispatch flow.</p>
+                <p className="hospital-auth-meta">Signed in as {hospitalUser.email}</p>
+              </div>
             </div>
-            <div className="driver-list">
-              {linkedDrivers.map((driver) => (
-                <article
-                  key={driver.id}
-                  className={`driver-card ${selectedDriverId === driver.id ? 'selected' : ''}`}
-                >
-                  <div className="driver-card-head">
-                    <div>
-                      <h4>{driver.callSign}</h4>
-                      <p>{driver.name}</p>
-                    </div>
-                    <div className="driver-badges">
-                      <StatusBadge label={driverStatusLabel[driver.status]} tone={driverStatusTone[driver.status]} />
-                      <StatusBadge label={driver.occupied ? 'Occupied' : 'Empty'} tone={driver.occupied ? 'danger' : 'success'} />
-                    </div>
-                  </div>
-
-                  <dl className="driver-meta">
-                    <div><dt>Vehicle</dt><dd>{driver.vehicleNumber}</dd></div>
-                    <div><dt>Fuel</dt><dd>{Math.round(driver.fuelPct)}%</dd></div>
-                    <div><dt>Speed</dt><dd>{Math.round(driver.speedKmph)} km/h</dd></div>
-                    <div><dt>Ping</dt><dd>{formatPingAge(driver.lastPingAt)} ago</dd></div>
-                  </dl>
-
-                  <div className="driver-actions">
-                    <button type="button" className="btn btn-ghost" onClick={() => setSelectedDriverId(driver.id)}>
-                      Focus
-                    </button>
-                    {selectedRequest && driver.status === 'available' && !driver.occupied && (
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => {
-                          void dispatchWithDriver(selectedRequest.id, driver.id, 'manual');
-                        }}
-                        disabled={isResolvingRoute}
-                      >
-                        Dispatch Here
-                      </button>
-                    )}
-                  </div>
-                </article>
-              ))}
+            <div className="hospital-head-actions">
+              <div className="hospital-head-meta">
+                <span className="meta-pill">Section: {activeSectionMeta.label}</span>
+                <span className="live-pill">Live Â· pings every {DRIVER_PING_SECONDS}s</span>
+                <span className="meta-pill">Last tick {formatDate(opsState.lastSimulationAt)}</span>
+              </div>
+              <div className="hospital-head-buttons">
+                <button type="button" className="btn btn-secondary" onClick={handleSimulateIncoming}>+ Simulate Request</button>
+                <button type="button" className="btn btn-ghost" onClick={handleResetDemo}>Reset Demo</button>
+                <button type="button" className="btn btn-ghost" onClick={logoutHospitalUser}>Logout</button>
+              </div>
             </div>
-          </section>
-        </section>
+          </header>
 
-        {/* ── RIGHT: Beds + Timeline ── */}
-        <aside className="hospital-panel side-panel">
-          <div className="panel-head">
-            <h2>Bed Manager</h2>
-            <p>Adjust occupancy in real time.</p>
+          {/* â”€â”€ Alerts â”€â”€ */}
+          <div className="alert-stack">
+            {bedPressure >= 0.9 && (
+              <AlertBanner tone="danger" title="Bed occupancy critical" message="Capacity crossed 90%. Consider releasing beds or rerouting intake." actionLabel="Release 1 Bed" onAction={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')} />
+            )}
+            {criticalCases > 0 && (
+              <AlertBanner tone="warning" title={`${criticalCases} critical case${criticalCases > 1 ? 's' : ''} in queue`} message="Prioritize triage and dispatch for high-acuity patients." />
+            )}
+            {dispatchNotice && <AlertBanner tone="info" title={dispatchNotice} />}
           </div>
 
-          <section className="bed-card">
-            <div className="bed-row">
-              <div>
-                <p>Total Beds</p>
-                <strong>{opsState.hospital.beds.totalBeds}</strong>
-              </div>
-              <div className="stepper">
-                <button type="button" onClick={() => handleBedAdjustment('totalBeds', -1, 'Total beds')}>−</button>
-                <button type="button" onClick={() => handleBedAdjustment('totalBeds', 1, 'Total beds')}>+</button>
-              </div>
-            </div>
-            <div className="bed-row">
-              <div>
-                <p>Occupied</p>
-                <strong>{opsState.hospital.beds.occupiedBeds}</strong>
-              </div>
-              <div className="stepper">
-                <button type="button" onClick={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')}>Release</button>
-                <button type="button" onClick={() => handleBedAdjustment('occupiedBeds', 1, 'Occupied beds')}>Occupy</button>
-              </div>
-            </div>
-            <div className="bed-row">
-              <div>
-                <p>ICU Total</p>
-                <strong>{opsState.hospital.beds.icuTotal}</strong>
-              </div>
-              <div className="stepper">
-                <button type="button" onClick={() => handleBedAdjustment('icuTotal', -1, 'ICU total')}>−</button>
-                <button type="button" onClick={() => handleBedAdjustment('icuTotal', 1, 'ICU total')}>+</button>
-              </div>
-            </div>
-            <div className="bed-row">
-              <div>
-                <p>ICU Occupied</p>
-                <strong>{opsState.hospital.beds.icuOccupied}</strong>
-              </div>
-              <div className="stepper">
-                <button type="button" onClick={() => handleBedAdjustment('icuOccupied', -1, 'ICU occupied')}>Release</button>
-                <button type="button" onClick={() => handleBedAdjustment('icuOccupied', 1, 'ICU occupied')}>Occupy</button>
-              </div>
-            </div>
-          </section>
-
-          <section className="timeline-panel" aria-label="Operations timeline">
-            <div className="panel-head compact">
-              <h3>Ops Timeline</h3>
-              <p>Dispatch, triage &amp; capacity events.</p>
-            </div>
-            <div className="timeline-list">
-              {opsState.events.slice(0, 14).map((event) => (
-                <article className="timeline-item" key={event.id}>
-                  <div className="timeline-item-head">
-                    <StatusBadge label={event.type} tone={eventTone(event.type)} />
-                    <time>{formatDate(event.at)}</time>
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+              SECTION: DASHBOARD
+          â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {activeSection === 'dashboard' && (
+            <>
+              {/* Readiness score banner */}
+              <section className="hospital-performance-banner" aria-label="Hospital performance summary">
+                <div className="hospital-performance-left">
+                  <div className="hospital-performance-score-ring" aria-hidden="true">
+                    <svg viewBox="0 0 120 120" className="hospital-score-svg">
+                      <circle cx="60" cy="60" r="52" className="hospital-score-track" />
+                      <circle cx="60" cy="60" r="52" className="hospital-score-value"
+                        strokeDasharray={`${(dispatchReadinessScore / 100) * scoreRingCircumference} ${scoreRingCircumference}`} />
+                    </svg>
+                    <div className="hospital-score-copy">
+                      <strong>{dispatchReadinessScore}</strong>
+                      <span>Score</span>
+                    </div>
                   </div>
-                  <p>{event.message}</p>
-                </article>
-              ))}
-            </div>
-          </section>
-        </aside>
+                  <div className="hospital-performance-copy">
+                    <h2>Dispatch Readiness</h2>
+                    <p>Based on fleet availability, completion rate, bed occupancy and response velocity.</p>
+                    <div className="hospital-performance-badges">
+                      <span className="hospital-performance-badge">{openRequests.length} active requests</span>
+                      <span className="hospital-performance-badge">{dispatchableRequests.length} dispatch pending</span>
+                      <span className="hospital-performance-badge">{criticalCases} critical</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="hospital-performance-metrics">
+                  {[
+                    { label: 'Fleet', value: availableFleetPct, tone: 'fleet' },
+                    { label: 'Completion', value: completionRate, tone: 'completion' },
+                    { label: 'Beds Free', value: Math.max(0, 100 - bedOccupancyPct), tone: 'beds' },
+                  ].map((m) => (
+                    <article key={m.label} className="hospital-performance-metric">
+                      <div className="hospital-mini-ring" aria-hidden="true">
+                        <svg viewBox="0 0 80 80">
+                          <circle cx="40" cy="40" r="30" className="hospital-mini-ring-track" />
+                          <circle cx="40" cy="40" r="30" className={`hospital-mini-ring-value tone-${m.tone}`}
+                            strokeDasharray={`${(m.value / 100) * miniRingCircumference} ${miniRingCircumference}`} />
+                        </svg>
+                        <span>{m.value}%</span>
+                      </div>
+                      <p>{m.label}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
 
-      </section>
+              {/* KPI cards */}
+              <section className="hospital-kpi-grid" aria-label="Operations summary">
+                <article className="kpi-card tone-danger">
+                  <div className="kpi-card-headline"><p>Open Requests</p><span className="kpi-card-chip">Live Queue</span></div>
+                  <strong>{openRequests.length}</strong>
+                  <span className="kpi-card-caption">{dispatchableRequests.length} awaiting dispatch</span>
+                </article>
+                <article className="kpi-card tone-blue">
+                  <div className="kpi-card-headline"><p>Fleet Linked</p><span className="kpi-card-chip">Ambulance Ops</span></div>
+                  <strong>{linkedDrivers.length}</strong>
+                  <span className="kpi-card-caption">{availableDrivers.length} available now</span>
+                </article>
+                <article className="kpi-card tone-amber">
+                  <div className="kpi-card-headline"><p>Active Trips</p><span className="kpi-card-chip">Route Live</span></div>
+                  <strong>{activeTrips}</strong>
+                  <span className="kpi-card-caption">{avgEtaMinutes > 0 ? `Avg ETA ${avgEtaMinutes} min` : 'No active ETAs'}</span>
+                </article>
+                <article className="kpi-card tone-green">
+                  <div className="kpi-card-headline"><p>Beds Available</p><span className="kpi-card-chip">Capacity</span></div>
+                  <strong>{availableBeds}</strong>
+                  <span className="kpi-card-caption">ICU {availableIcuBeds} / {opsState.hospital.beds.icuTotal}</span>
+                </article>
+              </section>
+
+              {/* Dashboard insight grid */}
+              <section className="hospital-dashboard-grid" aria-label="Dashboard analytics panels">
+                <section className="hospital-panel dashboard-insight-panel">
+                  <div className="panel-head"><h2>Queue Snapshot</h2><p>Highest-acuity patients currently waiting.</p></div>
+                  {recentPriorityRequests.length === 0 ? (
+                    <p className="empty-state">No open patient requests right now.</p>
+                  ) : (
+                    <div className="dashboard-priority-list">
+                      {recentPriorityRequests.map((r) => (
+                        <article key={r.id} className="dashboard-priority-item">
+                          <div><strong>{r.id}</strong><p>{r.patientName} â€” {r.symptom}</p></div>
+                          <div className="dashboard-priority-item-meta">
+                            <StatusBadge label={r.severity} tone={severityTone[r.severity]} />
+                            <span>{formatDate(r.reportedAt)}</span>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                  <button type="button" className="btn btn-primary" onClick={() => handleSectionChange('queue')}>Open Patient Queue</button>
+                </section>
+
+                <section className="hospital-panel dashboard-insight-panel">
+                  <div className="panel-head"><h2>Fleet Health</h2><p>Availability, fuel, and connectivity at a glance.</p></div>
+                  <dl className="dashboard-stat-grid">
+                    <div><dt>Availability</dt><dd>{availableFleetPct}%</dd></div>
+                    <div><dt>Offline Units</dt><dd>{offlineDrivers}</dd></div>
+                    <div><dt>Low Fuel Units</dt><dd>{lowFuelDrivers}</dd></div>
+                    <div><dt>Average Fuel</dt><dd>{averageFuelPct}%</dd></div>
+                    <div><dt>Completed Cases</dt><dd>{completionRate}%</dd></div>
+                    <div><dt>Active Trips</dt><dd>{activeTrips}</dd></div>
+                  </dl>
+                  <button type="button" className="btn btn-secondary" onClick={() => handleSectionChange('ambulance')}>Open Ambulance Dashboard</button>
+                </section>
+
+                <section className="hospital-panel dashboard-insight-panel">
+                  <div className="panel-head"><h2>Capacity Pressure</h2><p>Real-time occupancy pressure against total bed stock.</p></div>
+                  <div className="capacity-meter" aria-hidden="true">
+                    <span style={{ width: `${Math.min(100, Math.round(bedPressure * 100))}%` }} />
+                  </div>
+                  <p className="capacity-copy">{Math.round(bedPressure * 100)}% occupied â€” {availableBeds} beds and {availableIcuBeds} ICU beds available.</p>
+                  <div className="capacity-actions">
+                    <button type="button" className="btn btn-secondary" onClick={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')}>Release 1 Bed</button>
+                    <button type="button" className="btn btn-primary" onClick={() => handleSectionChange('beds')}>Open Bed Manager</button>
+                  </div>
+                </section>
+
+                <section className="timeline-panel" aria-label="Operations timeline">
+                  <div className="panel-head compact"><h3>Ops Timeline</h3><p>Dispatch, triage and capacity events.</p></div>
+                  <div className="timeline-list">
+                    {opsState.events.slice(0, 12).map((event) => (
+                      <article className="timeline-item" key={event.id}>
+                        <div className="timeline-item-head">
+                          <StatusBadge label={event.type} tone={eventTone(event.type)} />
+                          <time>{formatDate(event.at)}</time>
+                        </div>
+                        <p>{event.message}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              </section>
+            </>
+          )}
+
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+              SECTION: PATIENT QUEUE
+          â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {activeSection === 'queue' && (
+            <section className="hospital-queue-layout">
+              <section className="hospital-panel request-panel">
+                <div className="panel-head"><h2>Patient Queue</h2><p>Receive, triage, and dispatch.</p></div>
+                <div className="request-filters" role="tablist" aria-label="Request filters">
+                  {requestFilters.map((f) => (
+                    <button key={f.key} type="button" className={`filter-chip${requestFilter === f.key ? ' active' : ''}`} onClick={() => setRequestFilter(f.key)}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="request-list">
+                  {filteredRequests.length === 0 ? (
+                    <p className="empty-state">No requests for this filter.</p>
+                  ) : (
+                    filteredRequests.map((request) => (
+                      <article
+                        key={request.id}
+                        className={`request-card${selectedRequestId === request.id ? ' selected' : ''}`}
+                        onClick={() => setSelectedRequestId(request.id)}
+                      >
+                        <div className="request-card-head">
+                          <div><h3>{request.id}</h3><p>{request.patientName}, {request.age} yrs</p></div>
+                          <div className="request-card-badges">
+                            <StatusBadge label={request.severity} tone={severityTone[request.severity]} />
+                            <StatusBadge label={requestStatusLabel[request.status]} tone={requestStatusTone[request.status]} />
+                          </div>
+                        </div>
+                        <p className="request-symptom">{request.symptom}</p>
+                        <dl className="request-meta">
+                          <div><dt>Address</dt><dd>{request.address}</dd></div>
+                          <div><dt>Channel</dt><dd>{request.channel}</dd></div>
+                          <div><dt>Reported</dt><dd>{formatDate(request.reportedAt)}</dd></div>
+                        </dl>
+                        <div className="request-actions" onClick={(e) => e.stopPropagation()}>
+                          {request.status === 'new' && (
+                            <button type="button" className="btn btn-secondary" onClick={() => handleTriageRequest(request.id)}>Triage</button>
+                          )}
+                          {(request.status === 'new' || request.status === 'triaged') && availableDrivers.length > 0 && (
+                            <button type="button" className="btn btn-primary" onClick={() => handleAutoDispatchNearest(request.id)}>Auto Select Closest</button>
+                          )}
+                          <button type="button" className="btn btn-ghost" onClick={() => setSelectedRequestId(request.id)}>Track</button>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+
+              <section className="hospital-panel map-panel">
+                <div className="panel-head"><h2>Live Operations Map</h2><p>All linked drivers and active requests rendered live.</p></div>
+                <div className="map-view-wrapper">
+                  <MapView
+                    hospital={opsState.hospital}
+                    drivers={linkedDrivers}
+                    requests={opsState.requests}
+                    selectedDriverId={selectedDriverId}
+                    selectedRequestId={selectedRequestId}
+                    onSelectDriver={setSelectedDriverId}
+                    onSelectRequest={setSelectedRequestId}
+                    onSuggestClosestDriver={handleAutoDispatchNearest}
+                    suggestedDriversByRequest={
+                      closestSuggestion
+                        ? { [closestSuggestion.requestId]: `${closestSuggestion.driverCallSign} (${closestSuggestion.distanceKm.toFixed(1)} km, ${closestSuggestion.etaMinutes} min)` }
+                        : undefined
+                    }
+                  />
+                </div>
+                <section className="dispatch-console" aria-label="Dispatch console">
+                  <h3>Dispatch Console</h3>
+                  <div className="dispatch-fields">
+                    <label>
+                      Request
+                      <select value={selectedRequestId ?? ''} onChange={(e) => setSelectedRequestId(e.target.value || null)}>
+                        <option value="">Select request...</option>
+                        {dispatchableRequests.map((r) => (
+                          <option key={r.id} value={r.id}>{r.id} â€” {r.severity.toUpperCase()} â€” {r.address}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Driver
+                      <select value={selectedDriverId ?? ''} onChange={(e) => setSelectedDriverId(e.target.value || null)}>
+                        <option value="">Select driver...</option>
+                        {availableDrivers.map((d) => (
+                          <option key={d.id} value={d.id}>{d.callSign} â€” {d.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {closestSuggestion && selectedRequestId === closestSuggestion.requestId && (
+                    <p className="closest-driver-note">
+                      Closest driver selected: <strong>{closestSuggestion.driverCallSign}</strong> ({closestSuggestion.driverName}) â€”{' '}
+                      {closestSuggestion.distanceKm.toFixed(1)} km â€” ETA {closestSuggestion.etaMinutes} min. Press <strong>Dispatch Selected Pair</strong> to proceed.
+                    </p>
+                  )}
+                  <button type="button" className="btn btn-primary" onClick={handleDispatchSelected} disabled={!selectedRequest || !selectedDriver || isResolvingRoute}>
+                    {isResolvingRoute ? 'Preparing Road Route...' : 'Dispatch Selected Pair'}
+                  </button>
+                </section>
+              </section>
+            </section>
+          )}
+
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+              SECTION: AMBULANCE DASHBOARD
+          â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {activeSection === 'ambulance' && (
+            <>
+              <section className="hospital-kpi-grid ambulance-kpi-grid" aria-label="Ambulance summary">
+                <article className="kpi-card tone-blue">
+                  <div className="kpi-card-headline"><p>Ambulances Linked</p><span className="kpi-card-chip">Roster</span></div>
+                  <strong>{linkedDrivers.length}</strong>
+                  <span className="kpi-card-caption">{availableDrivers.length} currently available</span>
+                </article>
+                <article className="kpi-card tone-green">
+                  <div className="kpi-card-headline"><p>Availability</p><span className="kpi-card-chip">Uptime</span></div>
+                  <strong>{availableFleetPct}%</strong>
+                  <span className="kpi-card-caption">{offlineDrivers} units offline</span>
+                </article>
+                <article className="kpi-card tone-amber">
+                  <div className="kpi-card-headline"><p>Active Trips</p><span className="kpi-card-chip">In Transit</span></div>
+                  <strong>{activeTrips}</strong>
+                  <span className="kpi-card-caption">{avgEtaMinutes > 0 ? `Avg ETA ${avgEtaMinutes} min` : 'No active ETAs'}</span>
+                </article>
+                <article className="kpi-card tone-danger">
+                  <div className="kpi-card-headline"><p>Fleet Fuel</p><span className="kpi-card-chip">Efficiency</span></div>
+                  <strong>{averageFuelPct}%</strong>
+                  <span className="kpi-card-caption">{lowFuelDrivers} low-fuel units</span>
+                </article>
+              </section>
+
+              <section className="hospital-panel ambulance-dashboard-panel" aria-label="Ambulance roster">
+                <div className="panel-head"><h2>Ambulance Dashboard</h2><p>Driver assignment, fuel, speed and GPS ping status for every linked unit.</p></div>
+                <div className="driver-list driver-list--expanded">
+                  {linkedDrivers.map((driver) => (
+                    <article key={driver.id} className={`driver-card${selectedDriverId === driver.id ? ' selected' : ''}`}>
+                      <div className="driver-card-head">
+                        <div><h4>{driver.callSign}</h4><p>{driver.name}</p></div>
+                        <div className="driver-badges">
+                          <StatusBadge label={driverStatusLabel[driver.status]} tone={driverStatusTone[driver.status]} />
+                          <StatusBadge label={driver.occupied ? 'Occupied' : 'Empty'} tone={driver.occupied ? 'danger' : 'success'} />
+                        </div>
+                      </div>
+                      <dl className="driver-meta">
+                        <div><dt>Vehicle</dt><dd>{driver.vehicleNumber}</dd></div>
+                        <div><dt>Fuel</dt><dd>{Math.round(driver.fuelPct)}%</dd></div>
+                        <div><dt>Speed</dt><dd>{Math.round(driver.speedKmph)} km/h</dd></div>
+                        <div><dt>Ping</dt><dd>{formatPingAge(driver.lastPingAt)} ago</dd></div>
+                      </dl>
+                      <div className="driver-actions">
+                        <button type="button" className="btn btn-ghost" onClick={() => setSelectedDriverId(driver.id)}>Focus</button>
+                        {selectedRequest && driver.status === 'available' && !driver.occupied && (
+                          <button type="button" className="btn btn-secondary" onClick={() => { void dispatchWithDriver(selectedRequest.id, driver.id, 'manual'); }} disabled={isResolvingRoute}>
+                            Dispatch Here
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+
+          {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+              SECTION: BED MANAGER
+          â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
+          {activeSection === 'beds' && (
+            <section className="hospital-bed-layout">
+              <aside className="hospital-panel side-panel">
+                <div className="panel-head"><h2>Bed Manager</h2><p>Adjust occupancy and ICU availability in real time.</p></div>
+                <section className="bed-card">
+                  <div className="bed-row">
+                    <div><p>Total Beds</p><strong>{opsState.hospital.beds.totalBeds}</strong></div>
+                    <div className="stepper">
+                      <button type="button" onClick={() => handleBedAdjustment('totalBeds', -1, 'Total beds')}>âˆ’</button>
+                      <button type="button" onClick={() => handleBedAdjustment('totalBeds', 1, 'Total beds')}>+</button>
+                    </div>
+                  </div>
+                  <div className="bed-row">
+                    <div><p>Occupied</p><strong>{opsState.hospital.beds.occupiedBeds}</strong></div>
+                    <div className="stepper">
+                      <button type="button" onClick={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')}>Release</button>
+                      <button type="button" onClick={() => handleBedAdjustment('occupiedBeds', 1, 'Occupied beds')}>Occupy</button>
+                    </div>
+                  </div>
+                  <div className="bed-row">
+                    <div><p>ICU Total</p><strong>{opsState.hospital.beds.icuTotal}</strong></div>
+                    <div className="stepper">
+                      <button type="button" onClick={() => handleBedAdjustment('icuTotal', -1, 'ICU total')}>âˆ’</button>
+                      <button type="button" onClick={() => handleBedAdjustment('icuTotal', 1, 'ICU total')}>+</button>
+                    </div>
+                  </div>
+                  <div className="bed-row">
+                    <div><p>ICU Occupied</p><strong>{opsState.hospital.beds.icuOccupied}</strong></div>
+                    <div className="stepper">
+                      <button type="button" onClick={() => handleBedAdjustment('icuOccupied', -1, 'ICU occupied')}>Release</button>
+                      <button type="button" onClick={() => handleBedAdjustment('icuOccupied', 1, 'ICU occupied')}>Occupy</button>
+                    </div>
+                  </div>
+                </section>
+              </aside>
+
+              <section className="timeline-panel" aria-label="Capacity timeline">
+                <div className="panel-head compact"><h3>Capacity Timeline</h3><p>Bed updates and capacity actions from operators.</p></div>
+                <div className="timeline-list">
+                  {capacityEvents.length === 0 ? (
+                    <p className="empty-state">No bed-capacity changes recorded yet.</p>
+                  ) : (
+                    capacityEvents.slice(0, 14).map((event) => (
+                      <article className="timeline-item" key={event.id}>
+                        <div className="timeline-item-head">
+                          <StatusBadge label={event.type} tone={eventTone(event.type)} />
+                          <time>{formatDate(event.at)}</time>
+                        </div>
+                        <p>{event.message}</p>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            </section>
+          )}
+
+        </div>
+      </div>
     </main>
   );
 }
