@@ -7,6 +7,7 @@ import { DriverAuthPage } from './DriverAuthPage';
 import { DriverLayout } from './DriverLayout';
 import { resolveDriverUnitId } from '../utils/driverIdentity';
 import type {
+  CarAccidentAlert,
   DispatchOffer,
   DriverStatus,
   GeoPoint,
@@ -139,6 +140,7 @@ function loadOpsStateByKey(key: string): HospitalOpsState | null {
     if (isHospitalOpsState(parsed)) {
       return {
         ...parsed,
+        carAccidents: Array.isArray(parsed.carAccidents) ? parsed.carAccidents : [],
         pendingDispatchOffers: Array.isArray(parsed.pendingDispatchOffers) ? parsed.pendingDispatchOffers : [],
       };
     }
@@ -280,6 +282,18 @@ function offerSecondsLeft(offer: DispatchOffer, nowMs: number) {
   }
 
   return Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1000));
+}
+
+function isCarAccidentVisibleToDriver(alert: CarAccidentAlert, driverUnitId: string | null) {
+  if (!driverUnitId) {
+    return true;
+  }
+
+  if (!Array.isArray(alert.notifiedDriverIds) || alert.notifiedDriverIds.length === 0) {
+    return true;
+  }
+
+  return alert.notifiedDriverIds.includes(driverUnitId);
 }
 
 function appendEvent(
@@ -470,6 +484,21 @@ export function DriverDashboard() {
 
     return pendingDispatchOffers.filter((offer) => offer.offeredDriverId === authenticatedDriverUnitId).length;
   }, [authenticatedDriverUnitId, pendingDispatchOffers]);
+  const carAccidentAlerts = useMemo(
+    () =>
+      [...(opsState?.carAccidents ?? [])].sort(
+        (left, right) => Date.parse(right.airbagsActivatedAt) - Date.parse(left.airbagsActivatedAt),
+      ),
+    [opsState?.carAccidents],
+  );
+  const visibleCarAccidentAlerts = useMemo(
+    () =>
+      carAccidentAlerts.filter(
+        (alert) => alert.status !== 'resolved' && isCarAccidentVisibleToDriver(alert, authenticatedDriverUnitId),
+      ),
+    [authenticatedDriverUnitId, carAccidentAlerts],
+  );
+  const latestCarAccidentAlert = visibleCarAccidentAlerts[0] ?? null;
   const selectedDriver = useMemo(
     () => linkedDrivers.find((driver) => driver.id === selectedDriverId) ?? null,
     [linkedDrivers, selectedDriverId],
@@ -1004,6 +1033,52 @@ export function DriverDashboard() {
     setToast({ message: 'Backup request sent to dispatch', tone: 'warning' });
   };
 
+  const handleAcknowledgeCarAccident = (alertId: string) => {
+    if (!opsState) {
+      setToast({ message: 'Hospital state not linked yet.', tone: 'warning' });
+      return;
+    }
+
+    const alert = (opsState.carAccidents ?? []).find((candidate) => candidate.id === alertId);
+    if (!alert) {
+      setToast({ message: 'Car accident alert not found.', tone: 'warning' });
+      return;
+    }
+
+    if (alert.status !== 'new') {
+      setToast({ message: 'Car accident alert already acknowledged.', tone: 'neutral' });
+      return;
+    }
+
+    const nextCarAccidents = (opsState.carAccidents ?? []).map((candidate) =>
+      candidate.id === alertId
+        ? {
+            ...candidate,
+            status: 'acknowledged' as const,
+          }
+        : candidate,
+    );
+
+    const driverLabel = selectedDriver?.callSign ?? 'Driver unit';
+
+    let nextState: HospitalOpsState = {
+      ...opsState,
+      carAccidents: nextCarAccidents,
+      lastSimulationAt: new Date().toISOString(),
+    };
+
+    nextState = appendEvent(
+      nextState,
+      'car_accident',
+      `${driverLabel} acknowledged crash alert ${alert.id} for ${alert.carName} ${alert.carModel}.`,
+      undefined,
+      selectedDriver?.id ?? authenticatedDriverUnitId ?? undefined,
+    );
+
+    updateLinkedState(nextState);
+    setToast({ message: 'Car accident alert acknowledged.', tone: 'warning' });
+  };
+
   const handleSos = () => {
     if (opsState && selectedDriver) {
       const nextState = appendEvent(
@@ -1440,6 +1515,48 @@ export function DriverDashboard() {
           >
             {isAcceptingDispatchOffer ? 'Accepting...' : 'Accept Dispatch'}
           </button>
+        </section>
+      ) : null}
+
+      {latestCarAccidentAlert ? (
+        <section className="driver-car-accident-card" aria-label="Incoming car accident alert">
+          <div className="driver-car-accident-head">
+            <p className="dispatch-offer-eyebrow">Car Accident Alert</p>
+            <span className={`driver-car-accident-status status-${latestCarAccidentAlert.status}`}>
+              {latestCarAccidentAlert.status.toUpperCase()}
+            </span>
+          </div>
+
+          <div className="driver-car-accident-grid">
+            <p><strong>Car:</strong> {latestCarAccidentAlert.carName} {latestCarAccidentAlert.carModel}</p>
+            <p><strong>Person:</strong> {latestCarAccidentAlert.personName}</p>
+            <p><strong>Phone:</strong> {latestCarAccidentAlert.personPhone}</p>
+            <p>
+              <strong>Coordinates:</strong> {latestCarAccidentAlert.location.lat.toFixed(5)},{' '}
+              {latestCarAccidentAlert.location.lng.toFixed(5)}
+            </p>
+          </div>
+
+          <p className="driver-car-accident-meta">
+            Triggered at {formatEventTime(latestCarAccidentAlert.airbagsActivatedAt)} ·
+            {` ${visibleCarAccidentAlerts.length} active alert${visibleCarAccidentAlerts.length > 1 ? 's' : ''} for you`}
+          </p>
+
+          <div className="driver-car-accident-actions">
+            {latestCarAccidentAlert.status === 'new' ? (
+              <button
+                type="button"
+                className="dispatch-offer-accept"
+                onClick={() => handleAcknowledgeCarAccident(latestCarAccidentAlert.id)}
+              >
+                Acknowledge Alert
+              </button>
+            ) : null}
+
+            <a className="btn btn-secondary" href={`tel:${latestCarAccidentAlert.personPhone}`}>
+              Call Person
+            </a>
+          </div>
         </section>
       ) : null}
 

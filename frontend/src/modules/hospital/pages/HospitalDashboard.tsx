@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  CarFront,
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
@@ -31,6 +32,7 @@ import {
   SeverityLevel,
 } from '@shared/types/hospitalOps.types';
 import { createInitialHospitalOpsState } from '@shared/utils/hospitalDemoData';
+import { listCarAccidentAlerts, type CarAccidentAlert as ApiCarAccidentAlert } from '@shared/utils/carAccidentApi';
 import {
   addIncomingPatientRequest,
   buildRoadRoute,
@@ -47,13 +49,14 @@ const AUTO_INTAKE_SECONDS = 42;
 const ROSTER_SYNC_SECONDS = 12;
 const MOBILE_NAV_QUERY = '(max-width: 980px)';
 
-type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds';
+type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds' | 'carAccidents';
 
 const hospitalSections: Array<{ key: HospitalSectionKey; label: string; description: string; icon: LucideIcon }> = [
   { key: 'dashboard',  label: 'Dashboard',            description: 'Analytics and live hospital overview',           icon: LayoutDashboard },
   { key: 'queue',      label: 'Patient Queue',         description: 'Queue, live map, and dispatch control',          icon: Radio },
   { key: 'ambulance',  label: 'Ambulance Dashboard',   description: 'Ambulance and driver operational status',        icon: Truck },
   { key: 'beds',       label: 'Bed Manager',           description: 'Bed and ICU capacity controls',                  icon: ShieldCheck },
+  { key: 'carAccidents', label: 'Car Accidents',       description: 'Airbag-triggered accident alerts and victim details', icon: CarFront },
 ];
 
 function isMobileViewport() {
@@ -246,7 +249,13 @@ function loadInitialState(hospitalRef: HospitalLocationRef) {
   if (!persisted) return createInitialHospitalOpsState(hospitalRef);
   try {
     const parsed = JSON.parse(persisted) as unknown;
-    if (isHospitalOpsState(parsed)) return parsed;
+    if (isHospitalOpsState(parsed)) {
+      return {
+        ...parsed,
+        carAccidents: Array.isArray(parsed.carAccidents) ? parsed.carAccidents : [],
+        pendingDispatchOffers: Array.isArray(parsed.pendingDispatchOffers) ? parsed.pendingDispatchOffers : [],
+      };
+    }
   } catch {
     return createInitialHospitalOpsState(hospitalRef);
   }
@@ -361,8 +370,26 @@ function formatPingAge(lastPingAt: string) {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
 }
 
+function formatCarAlertDateTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
 function eventTone(eventType: OpsEventType): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
   if (eventType === 'incoming') return 'danger';
+  if (eventType === 'car_accident') return 'danger';
   if (eventType === 'triage' || eventType === 'capacity') return 'warning';
   if (eventType === 'handover') return 'success';
   if (eventType === 'dispatch' || eventType === 'arrival') return 'info';
@@ -402,6 +429,9 @@ export function HospitalDashboard() {
   const [dispatchNotice, setDispatchNotice] = useState<string | null>(null);
   const [closestSuggestion, setClosestSuggestion] = useState<ClosestDriverSuggestion | null>(null);
   const [isResolvingRoute, setIsResolvingRoute] = useState(false);
+  const [carAccidents, setCarAccidents] = useState<ApiCarAccidentAlert[]>([]);
+  const [isCarAccidentsLoading, setIsCarAccidentsLoading] = useState(false);
+  const [carAccidentsError, setCarAccidentsError] = useState<string | null>(null);
   const requestFilterRef = useRef<HTMLDivElement | null>(null);
   const [filterIndicatorStyle, setFilterIndicatorStyle] = useState({ left: 0, width: 0, visible: false });
 
@@ -566,9 +596,69 @@ export function HospitalDashboard() {
     return () => window.clearTimeout(id);
   }, [dispatchNotice]);
 
+  useEffect(() => {
+    if (!isHospitalAuthenticated || !hospitalUser) {
+      setCarAccidents([]);
+      setCarAccidentsError(null);
+      setIsCarAccidentsLoading(false);
+      return;
+    }
+
+    let isDisposed = false;
+
+    const refreshCarAccidents = async (withLoading: boolean) => {
+      if (withLoading) {
+        setIsCarAccidentsLoading(true);
+      }
+
+      try {
+        const alerts = await listCarAccidentAlerts(100);
+        if (isDisposed) {
+          return;
+        }
+
+        setCarAccidents(
+          [...alerts].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
+        );
+        setCarAccidentsError(null);
+      } catch (error) {
+        if (isDisposed) {
+          return;
+        }
+
+        setCarAccidentsError(error instanceof Error ? error.message : 'Unable to load car accident alerts.');
+      } finally {
+        if (!isDisposed && withLoading) {
+          setIsCarAccidentsLoading(false);
+        }
+      }
+    };
+
+    void refreshCarAccidents(true);
+
+    const intervalId = window.setInterval(() => {
+      void refreshCarAccidents(false);
+    }, 3_000);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [hospitalUser, isHospitalAuthenticated]);
+
   const linkedDrivers = useMemo(
     () => opsState.drivers.filter((d) => d.linkedHospitalId === opsState.hospital.id),
     [opsState.drivers, opsState.hospital.id],
+  );
+
+  const activeCarAccidents = useMemo(
+    () => carAccidents.filter((alert) => alert.status !== 'resolved'),
+    [carAccidents],
+  );
+
+  const newCarAccidentsCount = useMemo(
+    () => carAccidents.filter((alert) => alert.status === 'new').length,
+    [carAccidents],
   );
 
   const openRequests = useMemo(
@@ -851,6 +941,9 @@ export function HospitalDashboard() {
                 {section.key === 'queue' && criticalCases > 0 && (
                   <span className="hospital-sidebar-item-pulse" />
                 )}
+                {section.key === 'carAccidents' && newCarAccidentsCount > 0 && (
+                  <span className="hospital-sidebar-item-pulse" />
+                )}
               </span>
               <span className="hospital-sidebar-label">{section.label}</span>
             </button>
@@ -936,6 +1029,15 @@ export function HospitalDashboard() {
           <div className="alert-stack">
             {bedPressure >= 0.9 && (
               <AlertBanner tone="danger" title="Bed occupancy critical" message="Capacity crossed 90%. Consider releasing beds or rerouting intake." actionLabel="Release 1 Bed" onAction={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')} />
+            )}
+            {newCarAccidentsCount > 0 && (
+              <AlertBanner
+                tone="danger"
+                title={`${newCarAccidentsCount} new car accident alert${newCarAccidentsCount > 1 ? 's' : ''}`}
+                message="Airbag-triggered crash reports are waiting in Car Accidents."
+                actionLabel="Open Car Accidents"
+                onAction={() => handleSectionChange('carAccidents')}
+              />
             )}
             {criticalCases > 0 && (
               <AlertBanner tone="warning" title={`${criticalCases} critical case${criticalCases > 1 ? 's' : ''} in queue`} message="Prioritize triage and dispatch for high-acuity patients." />
@@ -1316,6 +1418,55 @@ export function HospitalDashboard() {
                   )}
                 </div>
               </section>
+            </section>
+          )}
+
+          {activeSection === 'carAccidents' && (
+            <section className="hospital-panel car-accident-feed-panel">
+              <div className="panel-head">
+                <h2>Car Accident Alerts</h2>
+                <p>
+                  Live alerts from the car site API. Showing car, person, and location details.{' '}
+                  {activeCarAccidents.length} active.
+                </p>
+              </div>
+
+              {isCarAccidentsLoading ? (
+                <p className="empty-state">Loading alerts...</p>
+              ) : null}
+
+              {!isCarAccidentsLoading && carAccidentsError ? (
+                <p className="empty-state">{carAccidentsError}</p>
+              ) : null}
+
+              {!isCarAccidentsLoading && !carAccidentsError && carAccidents.length === 0 ? (
+                <p className="empty-state">No car accident alerts found yet.</p>
+              ) : null}
+
+              {!isCarAccidentsLoading && !carAccidentsError && carAccidents.length > 0 ? (
+                <div className="car-accident-list">
+                  {carAccidents.map((alert) => (
+                    <article className={`car-accident-card status-${alert.status}`} key={alert.id}>
+                      <div className="car-accident-head">
+                        <div>
+                          <h3>{alert.carName} {alert.carModel}</h3>
+                          <p>{alert.id} - {formatCarAlertDateTime(alert.createdAt)}</p>
+                        </div>
+                        <div className="car-accident-badges">
+                          <StatusBadge label={alert.severity.toUpperCase()} tone={severityTone[alert.severity]} />
+                        </div>
+                      </div>
+
+                      <dl className="car-accident-meta">
+                        <div><dt>Person</dt><dd>{alert.personName}</dd></div>
+                        <div><dt>Phone</dt><dd>{alert.personPhone}</dd></div>
+                        <div><dt>Location</dt><dd>{alert.lat.toFixed(5)}, {alert.lng.toFixed(5)}</dd></div>
+                        <div><dt>Drivers Notified</dt><dd>{alert.notifiedDriverIds.length}</dd></div>
+                      </dl>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
             </section>
           )}
 

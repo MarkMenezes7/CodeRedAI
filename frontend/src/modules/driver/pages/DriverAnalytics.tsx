@@ -251,10 +251,6 @@ export function DriverAnalytics() {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedMission, setSelectedMission] = useState<string | null>(null);
 
-  if (!isDriverAuthenticated || !driverUser) {
-    return <DriverAuthPage />;
-  }
-
   const filteredMissions = useMemo(() => {
     let missions = [...DRIVER_MISSIONS];
 
@@ -366,6 +362,10 @@ export function DriverAnalytics() {
     a.click();
     URL.revokeObjectURL(url);
   }, [filteredMissions]);
+
+  if (!isDriverAuthenticated || !driverUser) {
+    return <DriverAuthPage />;
+  }
 
   return (
     <DriverLayout

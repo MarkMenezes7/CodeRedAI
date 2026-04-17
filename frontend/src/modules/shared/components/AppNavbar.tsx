@@ -8,6 +8,8 @@ interface AppNavbarProps {
 
 const navItems = [
   { path: '/', label: 'Home' },
+  { path: '/original', label: 'Original' },
+  { path: '/car', label: 'Car' },
   { path: '/hospital-dashboard', label: 'Hospital' },
   { path: '/driver-dashboard', label: 'Driver' },
   { path: '/admin-dashboard', label: 'Admin' },

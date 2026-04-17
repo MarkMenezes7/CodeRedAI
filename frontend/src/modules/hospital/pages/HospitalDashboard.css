@@ -517,6 +517,167 @@
   align-items: start;
 }
 
+.hospital-car-accident-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.car-accident-form-panel {
+  position: sticky;
+  top: 78px;
+  align-self: start;
+}
+
+.car-accident-form-grid {
+  grid-template-columns: 1fr;
+}
+
+.car-accident-form-grid input,
+.car-accident-form-grid select {
+  min-height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--c-border-hi);
+  background: var(--c-surface);
+  color: var(--c-text);
+  padding: 0 10px;
+  font-size: 0.84rem;
+  font-family: var(--font-body);
+  outline: none;
+  transition: border-color 140ms;
+}
+
+.car-accident-form-grid input:focus,
+.car-accident-form-grid select:focus {
+  border-color: rgba(215, 43, 43, 0.46);
+  box-shadow: 0 0 0 3px rgba(215, 43, 43, 0.12);
+}
+
+.car-location-status {
+  margin: 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--c-border-hi);
+  background: var(--c-raise);
+  padding: 9px 10px;
+  font-size: 0.8rem;
+  color: var(--c-muted);
+}
+
+.car-location-status.tone-loading {
+  border-color: rgba(47, 127, 232, 0.32);
+  background: rgba(47, 127, 232, 0.1);
+  color: #24558f;
+}
+
+.car-location-status.tone-ready {
+  border-color: rgba(31, 122, 78, 0.32);
+  background: rgba(31, 122, 78, 0.1);
+  color: #1f7a4e;
+}
+
+.car-location-status.tone-error {
+  border-color: rgba(215, 43, 43, 0.36);
+  background: rgba(215, 43, 43, 0.12);
+  color: #8f1f1f;
+}
+
+.car-accident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.car-accident-list {
+  display: grid;
+  gap: 8px;
+  max-height: 760px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.car-accident-list::-webkit-scrollbar {
+  width: 3px;
+}
+
+.car-accident-list::-webkit-scrollbar-thumb {
+  background: var(--c-faint);
+  border-radius: 3px;
+}
+
+.car-accident-card {
+  border: 1px solid #dbe4ef;
+  border-radius: var(--radius-lg);
+  background: #ffffff;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  box-shadow: 0 1px 6px rgba(15, 23, 42, 0.04);
+}
+
+.car-accident-card.status-new {
+  border-color: rgba(215, 43, 43, 0.5);
+  background: #fff4f4;
+}
+
+.car-accident-card.status-acknowledged {
+  border-color: rgba(141, 90, 10, 0.35);
+  background: #fffaf0;
+}
+
+.car-accident-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.car-accident-head h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.car-accident-head p {
+  margin: 4px 0 0;
+  color: var(--c-muted);
+  font-size: 0.78rem;
+}
+
+.car-accident-badges {
+  display: inline-flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.car-accident-meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.car-accident-meta div {
+  display: grid;
+  gap: 2px;
+}
+
+.car-accident-meta dt {
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--c-faint);
+}
+
+.car-accident-meta dd {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--c-muted);
+}
+
 .dashboard-insight-panel { gap: 12px; }
 
 .dashboard-priority-list { display: grid; gap: 8px; max-height: 360px; overflow-y: auto; padding-right: 2px; }
@@ -804,7 +965,8 @@
 /* ─── Responsive — 1300px ────────────────────────────────────────── */
 @media (max-width: 1300px) {
   .hospital-queue-layout,
-  .hospital-bed-layout { grid-template-columns: 1fr; }
+  .hospital-bed-layout,
+  .hospital-car-accident-layout { grid-template-columns: 1fr; }
   .driver-list--expanded { grid-template-columns: 1fr; }
 }
 
@@ -860,19 +1022,25 @@
   .hospital-kpi-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .hospital-dashboard-grid,
   .hospital-queue-layout,
-  .hospital-bed-layout { grid-template-columns: 1fr; }
+  .hospital-bed-layout,
+  .hospital-car-accident-layout { grid-template-columns: 1fr; }
 
   .hospital-performance-banner { padding: 18px; gap: 18px; }
   .hospital-performance-left { width: 100%; align-items: flex-start; }
   .request-list,
   .driver-list,
   .timeline-list,
-  .dashboard-priority-list { max-height: none; }
+  .dashboard-priority-list,
+  .car-accident-list { max-height: none; }
 
   .request-panel {
     position: static;
     max-height: none;
     overflow: visible;
+  }
+
+  .car-accident-form-panel {
+    position: static;
   }
 }
 
@@ -892,9 +1060,12 @@
 
   .dispatch-fields,
   .request-meta,
-  .driver-meta { grid-template-columns: 1fr; }
+  .driver-meta,
+  .car-accident-meta { grid-template-columns: 1fr; }
   .request-card-head,
-  .driver-card-head { flex-direction: column; }
+  .driver-card-head,
+  .car-accident-head { flex-direction: column; }
   .request-card-badges,
-  .driver-badges { justify-content: flex-start; }
+  .driver-badges,
+  .car-accident-badges { justify-content: flex-start; }
 }

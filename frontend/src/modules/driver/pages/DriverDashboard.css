@@ -111,6 +111,83 @@
   cursor: not-allowed;
 }
 
+.driver-car-accident-card {
+  width: min(1540px, 100%);
+  margin: 0 auto 12px;
+  border: 1px solid #f0b7bd;
+  border-radius: 14px;
+  background: linear-gradient(130deg, #fff4f5 0%, #fffdfd 60%, #f8fbff 100%);
+  box-shadow: 0 10px 20px rgba(172, 45, 45, 0.1);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.driver-car-accident-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.driver-car-accident-status {
+  min-height: 28px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.driver-car-accident-status.status-new {
+  background: #fdeced;
+  border-color: #e9b9bd;
+  color: #7f1d1d;
+}
+
+.driver-car-accident-status.status-acknowledged {
+  background: #fef3df;
+  border-color: #e7c48d;
+  color: #8d5a0a;
+}
+
+.driver-car-accident-status.status-resolved {
+  background: #e9f6ef;
+  border-color: #b8dbc9;
+  color: #1f7a4e;
+}
+
+.driver-car-accident-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.driver-car-accident-grid p {
+  margin: 0;
+  color: #20262e;
+  font-size: 0.88rem;
+}
+
+.driver-car-accident-meta {
+  margin: 0;
+  color: #6a3131;
+  font-size: 0.8rem;
+}
+
+.driver-car-accident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.driver-car-accident-actions .dispatch-offer-accept {
+  min-height: 40px;
+}
+
 .driver-head {
   display: flex;
   align-items: flex-start;
@@ -817,6 +894,15 @@
   .dispatch-offer-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .driver-car-accident-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .driver-car-accident-grid {
+    grid-template-columns: 1fr;
   }
 
   .right-align,

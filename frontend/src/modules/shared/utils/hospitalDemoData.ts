@@ -420,6 +420,7 @@ export function createInitialHospitalOpsState(hospitalOverride?: HospitalLocatio
     hospital: baseHospital,
     drivers: DEMO_DRIVERS.map((driver) => cloneDriver(driver, baseHospital.id, deltaLat, deltaLng)),
     requests: DEMO_REQUESTS.map((request) => cloneRequest(request, baseHospital.id, deltaLat, deltaLng)),
+    carAccidents: [],
     events: DEMO_EVENTS.map(cloneEvent),
     nextRequestNumber: 1005,
     lastSimulationAt: new Date().toISOString(),

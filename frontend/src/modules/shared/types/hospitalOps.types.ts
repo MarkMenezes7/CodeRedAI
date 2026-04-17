@@ -6,6 +6,8 @@ export type DriverStatus = 'available' | 'to_patient' | 'with_patient' | 'to_hos
 
 export type RequestChannel = 'whatsapp' | 'call-center' | 'mobile-app';
 
+export type CarAccidentStatus = 'new' | 'acknowledged' | 'resolved';
+
 export interface GeoPoint {
   lat: number;
   lng: number;
@@ -80,6 +82,21 @@ export interface PatientRequest {
   closedAt?: string;
 }
 
+export interface CarAccidentAlert {
+  id: string;
+  carName: string;
+  carModel: string;
+  personName: string;
+  personPhone: string;
+  location: GeoPoint;
+  severity: SeverityLevel;
+  airbagsActivatedAt: string;
+  hospitalId: string;
+  notifiedDriverIds: string[];
+  status: CarAccidentStatus;
+  notes?: string;
+}
+
 export type OpsEventType =
   | 'incoming'
   | 'triage'
@@ -87,6 +104,7 @@ export type OpsEventType =
   | 'arrival'
   | 'handover'
   | 'capacity'
+  | 'car_accident'
   | 'system';
 
 export interface OpsEvent {
@@ -110,6 +128,7 @@ export interface HospitalOpsState {
   hospital: HospitalUnit;
   drivers: DriverUnit[];
   requests: PatientRequest[];
+  carAccidents?: CarAccidentAlert[];
   pendingDispatchOffers?: DispatchOffer[];
   events: OpsEvent[];
   nextRequestNumber: number;

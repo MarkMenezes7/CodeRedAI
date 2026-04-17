@@ -60,6 +60,10 @@ def get_emergencies_collection() -> Collection:
     return _db["emergencies"]
 
 
+def get_car_accidents_collection() -> Collection:
+    return _db["car_accidents"]
+
+
 # ---------------------------------------------------------------------------
 # Index creation
 # ---------------------------------------------------------------------------
@@ -82,6 +86,12 @@ def init_indexes() -> None:
     get_emergencies_collection().create_index("phone_number")
     get_emergencies_collection().create_index("hospital_status")
     get_emergencies_collection().create_index("created_at")
+
+    # car accident alert indexes
+    get_car_accidents_collection().create_index("created_at")
+    get_car_accidents_collection().create_index("status")
+    get_car_accidents_collection().create_index("notified_hospital_ids")
+    get_car_accidents_collection().create_index("notified_driver_ids")
 
 
 def verify_database_connection() -> None:

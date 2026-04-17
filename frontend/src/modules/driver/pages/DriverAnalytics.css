@@ -97,6 +97,80 @@
   gap: 20px;
 }
 
+.da-car-alert-card {
+  border: 1px solid #f0b7bd;
+  border-radius: 14px;
+  background: linear-gradient(130deg, #fff4f5 0%, #fffdfd 60%, #f8fbff 100%);
+  box-shadow: 0 8px 18px rgba(172, 45, 45, 0.1);
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  animation: da-fadeInUp 0.45s ease both;
+}
+
+.da-car-alert-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.da-car-alert-eyebrow {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #a32020;
+}
+
+.da-car-alert-count {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #e9b9bd;
+  background: #fdeced;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: #7f1d1d;
+}
+
+.da-car-alert-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.da-car-alert-grid p {
+  margin: 0;
+  color: #20262e;
+  font-size: 0.88rem;
+}
+
+.da-car-alert-meta {
+  margin: 0;
+  color: #6a3131;
+  font-size: 0.8rem;
+}
+
+.da-car-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.da-car-alert-empty {
+  border-style: dashed;
+}
+
+.da-car-alert-empty p {
+  margin: 0;
+  color: #5b3a3a;
+  font-size: 0.9rem;
+}
+
 /* ═══════════════════════════════════════
    HEADER
    ═══════════════════════════════════════ */
@@ -1060,6 +1134,15 @@
   .da-page {
     padding: 12px;
     gap: 12px;
+
+  .da-car-alert-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .da-car-alert-grid {
+    grid-template-columns: 1fr;
+  }
   }
 }
 
