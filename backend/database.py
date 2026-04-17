@@ -6,7 +6,7 @@ from pathlib import Path
 
 import certifi
 from dotenv import load_dotenv
-from pymongo import MongoClient
+from pymongo import GEOSPHERE, MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import PyMongoError
@@ -36,6 +36,10 @@ _db: Database = _client[DB_NAME]
 _logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Collection accessors
+# ---------------------------------------------------------------------------
+
 def get_database() -> Database:
     return _db
 
@@ -52,14 +56,36 @@ def get_admins_collection() -> Collection:
     return _db["admins"]
 
 
-def verify_database_connection() -> None:
-    _client.admin.command("ping")
+def get_emergencies_collection() -> Collection:
+    return _db["emergencies"]
 
+
+# ---------------------------------------------------------------------------
+# Index creation
+# ---------------------------------------------------------------------------
 
 def init_indexes() -> None:
+    """Create all required indexes, including the 2dsphere index for geo-queries."""
     get_hospitals_collection().create_index("email", unique=True)
     get_drivers_collection().create_index("email", unique=True)
     get_admins_collection().create_index("email", unique=True)
+
+    # GeoJSON 2dsphere index — required for $near / $geoWithin queries
+    get_hospitals_collection().create_index([("location", GEOSPHERE)], name="location_2dsphere")
+    _logger.info("2dsphere index ensured on hospitals.location")
+
+    # hospital_id unique index — for cleaner API lookups
+    get_hospitals_collection().create_index("hospital_id", unique=True, sparse=True)
+    _logger.info("Unique index ensured on hospitals.hospital_id")
+
+    # emergencies indexes
+    get_emergencies_collection().create_index("phone_number")
+    get_emergencies_collection().create_index("hospital_status")
+    get_emergencies_collection().create_index("created_at")
+
+
+def verify_database_connection() -> None:
+    _client.admin.command("ping")
 
 
 def init_indexes_safe() -> bool:
@@ -74,3 +100,56 @@ def init_indexes_safe() -> bool:
             exc,
         )
         return False
+
+
+# ---------------------------------------------------------------------------
+# Migration helper — call once to fix legacy hospital location format
+# ---------------------------------------------------------------------------
+
+def migrate_hospitals_to_geojson() -> dict[str, int]:
+    """
+    One-shot migration: convert hospital documents from the legacy
+    ``{"lat": float, "lng": float}`` location format to GeoJSON
+    ``{"type": "Point", "coordinates": [lng, lat]}``.
+
+    Returns a dict with keys "migrated" and "skipped".
+    """
+    collection = get_hospitals_collection()
+    migrated = 0
+    skipped = 0
+
+    for doc in collection.find({}):
+        loc = doc.get("location", {})
+
+        # Already in GeoJSON format — skip
+        if isinstance(loc, dict) and loc.get("type") == "Point":
+            skipped += 1
+            continue
+
+        # Legacy format: {"lat": ..., "lng": ...}
+        lat = loc.get("lat") if isinstance(loc, dict) else None
+        lng = loc.get("lng") if isinstance(loc, dict) else None
+
+        if lat is None or lng is None:
+            _logger.warning(
+                "Hospital %s has no usable location — skipping migration.", doc.get("_id")
+            )
+            skipped += 1
+            continue
+
+        geojson_location = {
+            "type": "Point",
+            "coordinates": [float(lng), float(lat)],  # GeoJSON: [lng, lat]
+        }
+
+        collection.update_one(
+            {"_id": doc["_id"]},
+            {"$set": {"location": geojson_location}},
+        )
+        migrated += 1
+        _logger.info(
+            "Migrated hospital %s → GeoJSON [%.6f, %.6f]", doc.get("_id"), lng, lat
+        )
+
+    _logger.info("Migration complete. migrated=%d  skipped=%d", migrated, skipped)
+    return {"migrated": migrated, "skipped": skipped}

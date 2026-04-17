@@ -134,7 +134,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export function DriverEarnings() {
-  const { isDriverAuthenticated, driverUser } = useHospitalAuth();
+  const { isDriverAuthenticated, driverUser, logoutDriverUser } = useHospitalAuth();
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [payoutFilter, setPayoutFilter] = useState<PayoutFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -353,6 +353,11 @@ export function DriverEarnings() {
     <DriverLayout
       missionActive={DRIVER_MISSIONS.some((m) => m.status === 'Ongoing')}
       pickupCount={0}
+      onLogout={() => {
+        if (window.confirm('Logout from driver account?')) {
+          logoutDriverUser();
+        }
+      }}
     >
       <div className="de-page">
         {/* Header */}
@@ -617,7 +622,7 @@ export function DriverEarnings() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value, name) => {
+                    formatter={(value: any, name: any) => {
                       const numericValue =
                         typeof value === 'number'
                           ? value

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   Camera,
   KeyRound,
@@ -8,16 +8,12 @@ import {
   Wifi,
   WifiOff,
   Bell,
-  BellOff,
   Palette,
   Shield,
   AlertTriangle,
-  MapPin,
   Radio,
   TrendingUp,
-  Globe,
-  Map,
-  Satellite,
+
   Activity,
   CheckCircle,
   XCircle,
@@ -25,7 +21,6 @@ import {
   Clock,
   Zap,
   Navigation,
-  Ambulance,
 } from 'lucide-react';
 
 import { DriverAuthPage } from '@modules/driver/pages/DriverAuthPage';
@@ -223,6 +218,7 @@ export function DriverSettings() {
     <DriverLayout
       missionActive={DRIVER_MISSIONS.some((m) => m.status === 'Ongoing')}
       pickupCount={0}
+      onLogout={handleLogout}
     >
       <div className="driver-settings-page">
         <div style={{ display: 'grid', gap: '6px' }}>

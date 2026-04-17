@@ -151,7 +151,7 @@ function MissionChart({ data, activeBar, onBarHover }: MissionChartProps) {
           <Bar
             dataKey="missions"
             radius={[8, 8, 0, 0]}
-            onMouseEnter={(_, index) => onBarHover(index)}
+            onMouseEnter={(_: any, index: number) => onBarHover(index)}
           >
             {data.map((_, index) => (
               <Cell
@@ -242,7 +242,7 @@ function PerformanceGauge({ value, label, color }: { value: number; label: strin
 }
 
 export function DriverAnalytics() {
-  const { isDriverAuthenticated, driverUser } = useHospitalAuth();
+  const { isDriverAuthenticated, driverUser, logoutDriverUser } = useHospitalAuth();
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -371,6 +371,11 @@ export function DriverAnalytics() {
     <DriverLayout
       missionActive={ongoingMissions.length > 0}
       pickupCount={0}
+      onLogout={() => {
+        if (window.confirm('Logout from driver account?')) {
+          logoutDriverUser();
+        }
+      }}
     >
       <div className="da-page">
         {/* Header Section */}
@@ -679,7 +684,7 @@ export function DriverAnalytics() {
                       innerRadius={58}
                       outerRadius={88}
                       paddingAngle={4}
-                      onMouseEnter={(_, index) => setActivePieIndex(index)}
+                      onMouseEnter={(_: any, index: number) => setActivePieIndex(index)}
                       onMouseLeave={() => setActivePieIndex(null)}
                     >
                       {statusBreakdown.map((entry, index) => (

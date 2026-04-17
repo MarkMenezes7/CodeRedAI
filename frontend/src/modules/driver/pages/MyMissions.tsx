@@ -17,7 +17,6 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
-  User,
   X,
   XCircle,
 } from 'lucide-react';
@@ -306,7 +305,6 @@ function StatPill({
 }
 
 function SortButton({
-  field,
   label,
   active,
   dir,
@@ -445,7 +443,7 @@ function MissionRow({
 
 /* ─── Main Page ─────────────────────────────────────────────── */
 export function MyMissions() {
-  const { isDriverAuthenticated, driverUser } = useHospitalAuth();
+  const { isDriverAuthenticated, driverUser, logoutDriverUser } = useHospitalAuth();
 
   /* filter state */
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
@@ -563,6 +561,11 @@ export function MyMissions() {
     <DriverLayout
       missionActive={allMissions.some((m) => m.status === 'Ongoing')}
       pickupCount={0}
+      onLogout={() => {
+        if (window.confirm('Logout from driver account?')) {
+          logoutDriverUser();
+        }
+      }}
     >
       <div className="mm-page">
 

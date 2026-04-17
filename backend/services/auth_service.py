@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import random
+import string
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -67,6 +69,12 @@ DEFAULT_LINKED_HOSPITAL_ID = os.getenv("DEFAULT_LINKED_HOSPITAL_ID", "HSP-MUM-00
 DEFAULT_DRIVER_VEHICLE_NUMBER = os.getenv("DEFAULT_DRIVER_VEHICLE_NUMBER", "MH-01-0000")
 SEED_DEFAULT_ADMINS = _is_truthy(os.getenv("SEED_DEFAULT_ADMINS", "false"))
 
+
+def _generate_hospital_id() -> str:
+    """Generate a unique readable hospital ID like HSP-A3X7."""
+    suffix = "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    return f"HSP-{suffix}"
+
 DEFAULT_ADMIN_ACCOUNTS = [
     {
         "name": "Aarav Mehta",
@@ -103,12 +111,21 @@ def _build_callsign(name: str, email: str) -> str:
 
 
 def _build_hospital_user(doc: Dict[str, Any]) -> Dict[str, Any]:
+    location_out = None
+    if "location" in doc and doc["location"]:
+        loc = doc["location"]
+        if isinstance(loc, dict) and "coordinates" in loc:
+            # GeoJSON uses [lng, lat]
+            location_out = {"lng": loc["coordinates"][0], "lat": loc["coordinates"][1]}
+        else:
+            location_out = loc
+
     return {
         "id": str(doc["_id"]),
         "name": doc.get("name", ""),
         "email": doc.get("email", ""),
         "address": doc.get("address"),
-        "location": doc.get("location"),
+        "location": location_out,
     }
 
 
@@ -149,12 +166,20 @@ def signup_hospital(payload: HospitalSignupRequest) -> AuthResult:
     now = datetime.utcnow()
 
     doc = {
+        "hospital_id": _generate_hospital_id(),
         "name": payload.hospitalName.strip(),
         "email": email,
         "password_hash": hash_password(payload.password),
         "role": "hospital",
         "address": DEFAULT_HOSPITAL_ADDRESS,
-        "location": {"lat": DEFAULT_HOSPITAL_LAT, "lng": DEFAULT_HOSPITAL_LNG},
+        # GeoJSON Point format required for MongoDB 2dsphere geo-queries
+        "location": {
+            "type": "Point",
+            "coordinates": [DEFAULT_HOSPITAL_LNG, DEFAULT_HOSPITAL_LAT],  # [lng, lat]
+        },
+        "available_beds": 10,
+        "status": "active",
+        "contact": "",
         "created_at": now,
         "updated_at": now,
     }

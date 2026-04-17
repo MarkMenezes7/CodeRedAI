@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
   IndianRupee,
   LayoutDashboard,
+  LogOut,
   Menu,
   Radio,
   Settings,
@@ -17,6 +18,7 @@ import { SidebarItem } from './SidebarItem';
 interface SidebarProps {
   missionActive: boolean;
   pickupCount: number;
+  onLogout: () => void;
 }
 
 type SidebarRouteItem = {
@@ -29,6 +31,7 @@ type SidebarRouteItem = {
 };
 
 const MOBILE_BREAKPOINT_PX = 920;
+const DESKTOP_TOP_OFFSET_PX = 66;
 
 function getCurrentHashPath() {
   if (typeof window === 'undefined') {
@@ -52,22 +55,45 @@ function matchesPath(path: string, aliases: string[] | undefined, currentPath: s
 }
 
 const sidebarBaseStyle: CSSProperties = {
-  background: '#ffffff',
+  background: 'rgba(255, 255, 255, 0.64)',
   color: '#20262e',
-  borderRight: '1px solid #c4cdd8',
+  borderRight: '1px solid rgba(196, 205, 216, 0.9)',
   flexShrink: 0,
   position: 'relative',
   transition: 'width 300ms ease, transform 300ms ease',
   overflow: 'visible',
+  backdropFilter: 'blur(14px) saturate(1.25)',
+  WebkitBackdropFilter: 'blur(14px) saturate(1.25)',
 };
 
-export function Sidebar({ missionActive, pickupCount: _pickupCount }: SidebarProps) {
+export function Sidebar({ missionActive, pickupCount: _pickupCount, onLogout }: SidebarProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth <= MOBILE_BREAKPOINT_PX : false,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState(getCurrentHashPath);
+  const navRef = useRef<HTMLElement | null>(null);
+  const [indicatorStyle, setIndicatorStyle] = useState({ top: 0, height: 0, visible: false });
+
+  const syncIndicator = useCallback(() => {
+    const navElement = navRef.current;
+    if (!navElement) {
+      return;
+    }
+
+    const activeItem = navElement.querySelector<HTMLElement>('.driver-sidebar-item.active');
+    if (!activeItem) {
+      setIndicatorStyle((current) => ({ ...current, visible: false }));
+      return;
+    }
+
+    setIndicatorStyle({
+      top: activeItem.offsetTop,
+      height: activeItem.offsetHeight,
+      visible: true,
+    });
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -89,6 +115,25 @@ export function Sidebar({ missionActive, pickupCount: _pickupCount }: SidebarPro
       window.removeEventListener('resize', onResize);
     };
   }, []);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncIndicator);
+    const onResize = () => syncIndicator();
+
+    window.addEventListener('resize', onResize);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [syncIndicator]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(syncIndicator);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [currentPath, isCollapsed, isMobile, syncIndicator]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -161,11 +206,33 @@ export function Sidebar({ missionActive, pickupCount: _pickupCount }: SidebarPro
       }
     : {
         ...sidebarBaseStyle,
+        position: 'fixed',
+        top: `${DESKTOP_TOP_OFFSET_PX}px`,
+        left: 0,
+        bottom: 0,
+        zIndex: 40,
         width: `${resolvedCollapsed ? collapsedDesktopWidth : expandedDesktopWidth}px`,
-        minHeight: '100%',
+        minHeight: `calc(100vh - ${DESKTOP_TOP_OFFSET_PX}px)`,
+      };
+
+  const railStyle: CSSProperties = isMobile
+    ? {
+        width: 0,
+        flexShrink: 0,
+      }
+    : {
+        width: `${resolvedCollapsed ? collapsedDesktopWidth : expandedDesktopWidth}px`,
+        flexShrink: 0,
       };
 
   const onItemNavigate = isMobile ? () => setDrawerOpen(false) : undefined;
+
+  const handleLogout = () => {
+    if (isMobile) {
+      setDrawerOpen(false);
+    }
+    onLogout();
+  };
 
   return (
     <>
@@ -213,14 +280,16 @@ export function Sidebar({ missionActive, pickupCount: _pickupCount }: SidebarPro
         />
       ) : null}
 
+      <div style={railStyle} aria-hidden="true" />
+
       <aside aria-label="Driver sidebar navigation" style={asideStyle}>
         <div
           style={{
             padding: resolvedCollapsed ? '16px 0' : '16px 12px',
-            display: 'grid',
+            display: 'flex',
+            flexDirection: 'column',
             gap: '10px',
             height: '100%',
-            alignContent: 'start',
           }}
         >
           <div
@@ -260,7 +329,34 @@ export function Sidebar({ missionActive, pickupCount: _pickupCount }: SidebarPro
             ) : null}
           </div>
 
-          <nav style={{ display: 'grid', gap: '4px' }}>
+          <nav
+            ref={navRef}
+            style={{
+              display: 'grid',
+              gap: '4px',
+              position: 'relative',
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                borderRadius: '10px',
+                border: '1px solid rgba(226, 116, 116, 0.84)',
+                background: 'linear-gradient(145deg, rgba(253, 210, 210, 0.86) 0%, rgba(242, 142, 142, 0.64) 100%)',
+                boxShadow: '0 8px 20px rgba(136, 24, 24, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.82)',
+                top: 0,
+                height: `${indicatorStyle.height}px`,
+                transform: `translateY(${indicatorStyle.top}px)`,
+                opacity: indicatorStyle.visible ? 1 : 0,
+                transition:
+                  'transform 460ms cubic-bezier(0.2, 0.9, 0.2, 1), height 460ms cubic-bezier(0.2, 0.9, 0.2, 1), opacity 240ms ease',
+                pointerEvents: 'none',
+                zIndex: 0,
+              }}
+            />
             {routeItems.map((item) => (
               <SidebarItem
                 key={item.path}
@@ -275,6 +371,31 @@ export function Sidebar({ missionActive, pickupCount: _pickupCount }: SidebarPro
               />
             ))}
           </nav>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            title={resolvedCollapsed ? 'Logout' : undefined}
+            style={{
+              marginTop: 'auto',
+              minHeight: '44px',
+              borderRadius: '10px',
+              border: '1px solid #d9a0a0',
+              background: 'rgba(255, 236, 236, 0.72)',
+              color: '#8f1f1f',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: resolvedCollapsed ? 'center' : 'flex-start',
+              gap: '8px',
+              padding: resolvedCollapsed ? '0' : '0 12px',
+              fontSize: '0.82rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <LogOut size={16} />
+            {!resolvedCollapsed ? 'Logout' : null}
+          </button>
         </div>
 
         {!isMobile ? (

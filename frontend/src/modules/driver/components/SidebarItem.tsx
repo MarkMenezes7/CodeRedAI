@@ -16,20 +16,22 @@ const baseItemStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: '12px',
+  width: '100%',
   minHeight: '46px',
   borderRadius: '10px',
   padding: '0 12px',
   color: '#20262e',
   textDecoration: 'none',
   position: 'relative',
+  zIndex: 1,
   transition: 'background-color 160ms ease, color 160ms ease, box-shadow 160ms ease',
 };
 
 const activeItemStyle: CSSProperties = {
   color: '#15181d',
-  background: 'rgba(215, 43, 43, 0.12)',
-  borderLeft: '3px solid #d72b2b',
-  boxShadow: 'inset 0 0 16px rgba(215, 43, 43, 0.1)',
+  background: 'transparent',
+  borderLeft: '3px solid transparent',
+  boxShadow: 'none',
 };
 
 const inactiveItemStyle: CSSProperties = {
@@ -54,6 +56,8 @@ export function SidebarItem({
       href={normalizedHref}
       onClick={onNavigate}
       title={collapsed ? label : undefined}
+      className={active ? 'driver-sidebar-item active' : 'driver-sidebar-item'}
+      data-active={active ? 'true' : 'false'}
       style={{
         ...baseItemStyle,
         ...(active ? activeItemStyle : inactiveItemStyle),
