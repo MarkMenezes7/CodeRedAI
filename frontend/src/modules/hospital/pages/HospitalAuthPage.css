@@ -1,0 +1,190 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap');
+
+.hospital-auth-page {
+  min-height: calc(100vh - 96px);
+  display: grid;
+  place-items: center;
+  padding: 28px 14px;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(215, 43, 43, 0.09), transparent 44%),
+    radial-gradient(circle at 85% 80%, rgba(31, 109, 178, 0.09), transparent 38%),
+    linear-gradient(180deg, #f8fafd 0%, #f1f5fa 100%);
+}
+
+.hospital-auth-card {
+  width: min(560px, 100%);
+  background: #ffffff;
+  border: 1.5px solid #bcc7d4;
+  border-radius: 18px;
+  padding: 24px;
+  display: grid;
+  gap: 14px;
+  box-shadow: 0 16px 34px rgba(17, 24, 39, 0.1);
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+}
+
+.hospital-auth-eyebrow {
+  margin: 0;
+  color: #c11f2a;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.hospital-auth-card h1 {
+  margin: 0;
+  color: #111418;
+  font-size: clamp(1.4rem, 2vw, 1.9rem);
+  letter-spacing: -0.03em;
+}
+
+.hospital-auth-subtitle {
+  margin: 0;
+  color: #1c232b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.hospital-auth-mode-switch {
+  display: inline-flex;
+  gap: 6px;
+  border: 1px solid #c8d1dd;
+  background: #f4f7fb;
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.hospital-auth-mode-switch button {
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #1f252d;
+  cursor: pointer;
+}
+
+.hospital-auth-mode-switch button.active {
+  background: #d72b2b;
+  color: #ffffff;
+}
+
+.hospital-auth-form {
+  display: grid;
+  gap: 10px;
+}
+
+.hospital-auth-form label {
+  display: grid;
+  gap: 5px;
+  color: #0f141a;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.hospital-auth-form input {
+  min-height: 42px;
+  border: 1.5px solid #b6c3d2;
+  border-radius: 10px;
+  padding: 0 12px;
+  color: #0f141a;
+  background: #ffffff;
+  font-size: 0.9rem;
+}
+
+.hospital-auth-form input:focus {
+  outline: none;
+  border-color: #d72b2b;
+  box-shadow: 0 0 0 3px rgba(215, 43, 43, 0.14);
+}
+
+.hospital-auth-toast {
+  margin: 0;
+  color: #9c1a1a;
+  background: #ffe8e8;
+  border: 1px solid #f5bebe;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.84rem;
+  box-shadow: 0 10px 18px rgba(156, 26, 26, 0.16);
+}
+
+.hospital-auth-submit {
+  min-height: 42px;
+  border-radius: 10px;
+  border: 1px solid #db4f4f;
+  background: linear-gradient(135deg, #ef4040, #d72b2b);
+  color: #ffffff;
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.hospital-auth-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hospital-auth-presets {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #d3dce8;
+  padding-top: 12px;
+}
+
+.hospital-auth-presets p {
+  margin: 0;
+  color: #121820;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.hospital-auth-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.hospital-auth-chip {
+  border: 1px solid #b8c4d3;
+  background: #f7f9fc;
+  color: #171d24;
+  border-radius: 999px;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.hospital-auth-chip:hover {
+  border-color: #d72b2b;
+  color: #c62727;
+}
+
+@media (max-width: 640px) {
+  .hospital-auth-card {
+    padding: 18px;
+    border-radius: 14px;
+  }
+
+  .hospital-auth-mode-switch {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .hospital-auth-mode-switch button {
+    flex: 1;
+  }
+}

@@ -1,0 +1,67 @@
+.alert-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  padding: 14px 16px;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+}
+
+.alert-banner-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.alert-banner-copy strong {
+  font-size: 0.9rem;
+  letter-spacing: 0.01em;
+}
+
+.alert-banner-copy p {
+  margin: 0;
+  color: #5c6672;
+  font-size: 0.86rem;
+}
+
+.alert-banner-action {
+  border: 1px solid #d4dae2;
+  background: #ffffff;
+  color: #223043;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.alert-banner-info {
+  border-color: #cce4fb;
+  background: #eff8ff;
+}
+
+.alert-banner-warning {
+  border-color: #f1d6a2;
+  background: #fff7e7;
+}
+
+.alert-banner-danger {
+  border-color: #e6bcbc;
+  background: #fff3f3;
+}
+
+.alert-banner-success {
+  border-color: #bde5d0;
+  background: #ecf9f1;
+}
+
+@media (max-width: 640px) {
+  .alert-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
