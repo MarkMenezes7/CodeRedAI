@@ -23,9 +23,11 @@ from twilio.twiml.messaging_response import MessagingResponse
 try:
     from ..services.emergency_service import create_emergency, save_to_db
     from ..services.hospital_service import find_nearest_hospitals, notify_hospitals
+    from ..services.driver_service import find_nearest_drivers, create_driver_offers
 except ImportError:
     from services.emergency_service import create_emergency, save_to_db
     from services.hospital_service import find_nearest_hospitals, notify_hospitals
+    from services.driver_service import find_nearest_drivers, create_driver_offers
 
 _logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -211,33 +213,39 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
 
             emergency_id = save_to_db(doc)
 
-            # Standard flow: Geo-search hospitals and notify them
+            # Standard flow: Geo-search hospitals AND drivers simultaneously
             lat = session.get("latitude")
             lng = session.get("longitude")
             
             hospitals = []
+            drivers = []
             if emergency_id and lat is not None and lng is not None:
+                # Parallel branch 1: Hospitals
                 hospitals = find_nearest_hospitals(lat, lng)
                 notify_hospitals(emergency_id, hospitals)
+                # Parallel branch 2: Drivers
+                drivers = find_nearest_drivers(lat, lng)
+                create_driver_offers(emergency_id, drivers)
 
             emoji = _EMERGENCY_EMOJI.get(emergency_type, "⚠️")
             label = _EMERGENCY_LABEL.get(emergency_type, "Emergency")
 
-            if hospitals:
+            if hospitals or drivers:
                 confirmation = (
                     f"🚨 *EMERGENCY RECORDED!*\n"
                     f"{'─' * 28}\n"
                     f"{emoji} Emergency: *{label}*\n"
                     f"📍 Location: {session.get('address', 'Unknown')}\n"
-                    f"🏥 Nearby Hospitals Notified: *{len(hospitals)}*\n"
+                    f"🏥 Hospitals Notified: *{len(hospitals)}*\n"
+                    f"🚑 Drivers Notified: *{len(drivers)}*\n"
                     f"{'─' * 28}\n"
                 )
                 if emergency_id:
                     confirmation += f"📋 Case ID: {emergency_id[:12]}…\n\n"
                 
                 confirmation += (
-                    "✅ *We have alerted the nearest hospitals.*\n"
-                    "Please stay calm. An ambulance will be dispatched to your location the moment a hospital confirms availability.\n\n"
+                    "✅ *We have alerted the nearest hospitals and drivers.*\n"
+                    "Please stay calm. An ambulance will be dispatched to your location the moment a driver accepts.\n\n"
                     "_Send *emergency* to report a new incident._"
                 )
             else:
@@ -252,7 +260,7 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
                     confirmation += f"📋 Case ID: {emergency_id[:12]}…\n\n"
                 
                 confirmation += (
-                    "⚠️ *Notice:* No active hospital was found within 5 km of your location.\n"
+                    "⚠️ *Notice:* No active hospitals or drivers were found within 5 km of your location.\n"
                     "Our central dispatch team has been flagged and is attempting manual routing. Standard emergency services should also be contacted.\n\n"
                     "_Send *emergency* to report a new incident._"
                 )
@@ -261,8 +269,8 @@ async def whatsapp_webhook(request: Request) -> PlainTextResponse:
             del _sessions[phone_number]
 
             _logger.info(
-                "Emergency recorded | phone=%s | type=%s | notified_count=%d | db_id=%s",
-                phone_number, emergency_type, len(hospitals), emergency_id,
+                "Emergency recorded | phone=%s | type=%s | hospitals=%d | drivers=%d | db_id=%s",
+                phone_number, emergency_type, len(hospitals), len(drivers), emergency_id,
             )
 
             return _twiml_response(confirmation)

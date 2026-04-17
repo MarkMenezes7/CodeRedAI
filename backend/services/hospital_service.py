@@ -192,7 +192,7 @@ def accept_emergency(hospital_id: str, emergency_id: str) -> dict[str, Any]:
                 "$set": {
                     "assigned_hospital": hospital_id,
                     "hospital_status": "accepted",
-                    "status": "hospital_assigned",
+                    "status": "HOSPITAL_ASSIGNED",
                     "updated_at": datetime.now(tz=timezone.utc),
                 }
             },
@@ -210,9 +210,34 @@ def accept_emergency(hospital_id: str, emergency_id: str) -> dict[str, Any]:
         return {"won": False, "ambulance": None, "message": "Emergency already assigned to another hospital."}
 
     _logger.info(
-        "[ACCEPT WON] hospital=%s  emergency=%s — dispatching ambulance...",
+        "[ACCEPT WON] hospital=%s  emergency=%s",
         hospital_id, emergency_id,
     )
+
+    # Check if a driver is already assigned — if not, trigger driver discovery
+    try:
+        doc = get_emergencies_collection().find_one({"_id": _oid(emergency_id)})
+        if doc and not doc.get("assigned_driver_id"):
+            loc = doc.get("location", {})
+            lat = loc.get("lat")
+            lng = loc.get("lng")
+            if lat is not None and lng is not None:
+                try:
+                    from .driver_service import find_nearest_drivers, create_driver_offers
+                except ImportError:
+                    from services.driver_service import find_nearest_drivers, create_driver_offers
+                
+                existing_offers = doc.get("driver_offers", [])
+                exclude_ids = [o["driver_id"] for o in existing_offers]
+                drivers = find_nearest_drivers(lat, lng, exclude_ids=exclude_ids)
+                if drivers:
+                    create_driver_offers(emergency_id, drivers)
+                    _logger.info(
+                        "[ACCEPT] Hospital accepted — also notified %d driver(s)",
+                        len(drivers),
+                    )
+    except Exception as exc:
+        _logger.warning("[ACCEPT] Driver discovery post-acceptance failed: %s", exc)
 
     # Trigger ambulance dispatch immediately after winning
     ambulance = dispatch_ambulance(emergency_id)

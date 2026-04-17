@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import os
+
+output_file = 'd:/Maxwell/Projects/CodeRedAI/frontend/src/modules/driver/pages/LiveMission.tsx'
+
+content = """import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Crosshair, Maximize2, Pause, Play, RotateCcw, Volume2, VolumeX, PhoneCall, CheckCircle } from 'lucide-react';
 import Map, { Layer, Marker, NavigationControl, Source, type LayerProps, type MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -140,8 +144,8 @@ export function LiveMission() {
     return 'arrived';
   }, [activeMission]);
 
-  const pickupPosition = useMemo(() => activeMission?.patient_lng && activeMission?.patient_lat ? [activeMission.patient_lng, activeMission.patient_lat] as [number, number] : null, [activeMission?.patient_lng, activeMission?.patient_lat]);
-  const hospitalPosition = useMemo(() => activeMission?.hospital_lng && activeMission?.hospital_lat ? [activeMission.hospital_lng, activeMission.hospital_lat] as [number, number] : null, [activeMission?.hospital_lng, activeMission?.hospital_lat]);
+  const pickupPosition = activeMission?.patient_lng && activeMission?.patient_lat ? [activeMission.patient_lng, activeMission.patient_lat] as [number, number] : null;
+  const hospitalPosition = activeMission?.hospital_lng && activeMission?.hospital_lat ? [activeMission.hospital_lng, activeMission.hospital_lat] as [number, number] : null;
   
   const destinationPosition = activeLeg === 'to_pickup' ? pickupPosition : hospitalPosition;
 
@@ -181,8 +185,6 @@ export function LiveMission() {
 
   const effectiveDriverPosition = currentPosition ?? initialDriverPosition;
 
-  const routeFetchKey = `${activeLeg}_${destinationPosition?.[0]}_${destinationPosition?.[1]}`;
-
   useEffect(() => {
     if (!activeMission || !effectiveDriverPosition || !destinationPosition || !MAPBOX_TOKEN) return;
     if (activeLeg === 'arrived') return;
@@ -202,8 +204,7 @@ export function LiveMission() {
       .finally(() => setIsLoadingRoute(false));
 
     return () => controller.abort();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeFetchKey]); // Intentionally restricted dependencies to avoid refetching on position pings
+  }, [activeLeg, activeMission, destinationPosition]); // Intentionally not dependent on full location updates to avoid refetching
 
   useEffect(() => {
       if (routeData && activeLeg !== 'arrived') {
@@ -389,3 +390,9 @@ export function LiveMission() {
     </DriverLayout>
   );
 }
+"""
+
+with open(output_file, 'w', encoding='utf-8') as f:
+    f.write(content)
+
+print(f"Successfully wrote {output_file}")
