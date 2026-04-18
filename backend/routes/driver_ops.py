@@ -34,9 +34,15 @@ try:
     from ..services.driver_service import (
         accept_driver_offer,
         get_active_mission,
+        get_driver_earnings,
+        get_driver_mission_history,
+        get_driver_profile,
+        get_driver_stats,
         get_pending_offers_for_driver,
         reject_driver_offer,
         update_driver_location,
+        update_driver_profile,
+        update_driver_settings,
         update_mission_status,
     )
 except ImportError:
@@ -55,9 +61,15 @@ except ImportError:
     from services.driver_service import (
         accept_driver_offer,
         get_active_mission,
+        get_driver_earnings,
+        get_driver_mission_history,
+        get_driver_profile,
+        get_driver_stats,
         get_pending_offers_for_driver,
         reject_driver_offer,
         update_driver_location,
+        update_driver_profile,
+        update_driver_settings,
         update_mission_status,
     )
 
@@ -303,3 +315,112 @@ async def driver_mission_update_endpoint(payload: MissionStatusUpdate):
         message=result["message"],
         new_status=payload.status,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/driver/missions
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/driver/missions",
+    summary="Get driver's mission history",
+)
+async def driver_missions_endpoint(
+    driver_id: str = Query(..., description="Driver email/ID"),
+):
+    """Returns all past missions for this driver."""
+    missions = get_driver_mission_history(driver_id)
+    return {"success": True, "count": len(missions), "missions": missions}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/driver/earnings
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/driver/earnings",
+    summary="Get driver's earnings data",
+)
+async def driver_earnings_endpoint(
+    driver_id: str = Query(..., description="Driver email/ID"),
+):
+    """Returns detailed earnings breakdown and chart data."""
+    earnings = get_driver_earnings(driver_id)
+    return {"success": True, **earnings}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/driver/stats
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/driver/stats",
+    summary="Get driver's aggregate statistics",
+)
+async def driver_stats_endpoint(
+    driver_id: str = Query(..., description="Driver email/ID"),
+):
+    """Returns aggregate performance stats."""
+    stats = get_driver_stats(driver_id)
+    return {"success": True, **stats}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/driver/profile
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/driver/profile",
+    summary="Get driver profile",
+)
+async def driver_profile_get_endpoint(
+    driver_id: str = Query(..., description="Driver email/ID"),
+):
+    """Returns driver profile information."""
+    profile = get_driver_profile(driver_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver not found.")
+    return {"success": True, **profile}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/driver/profile
+# ---------------------------------------------------------------------------
+
+@router.put(
+    "/driver/profile",
+    summary="Update driver profile",
+)
+async def driver_profile_update_endpoint(payload: dict):
+    """Update editable profile fields (name, phone)."""
+    driver_id = payload.get("driver_id")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="driver_id is required.")
+    result = update_driver_profile(
+        driver_id=driver_id,
+        name=payload.get("name"),
+        phone=payload.get("phone"),
+    )
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/driver/settings
+# ---------------------------------------------------------------------------
+
+@router.put(
+    "/driver/settings",
+    summary="Update driver settings",
+)
+async def driver_settings_update_endpoint(payload: dict):
+    """Update driver preferences (availability, notifications, etc)."""
+    driver_id = payload.get("driver_id")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="driver_id is required.")
+    settings = {k: v for k, v in payload.items() if k != "driver_id"}
+    result = update_driver_settings(driver_id=driver_id, settings=settings)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result

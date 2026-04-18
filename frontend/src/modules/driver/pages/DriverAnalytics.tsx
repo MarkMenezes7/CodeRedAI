@@ -1,5 +1,5 @@
 // DriverAnalytics.tsx
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowDownRight,
@@ -40,10 +40,11 @@ import { StatusBadge } from '@shared/components/StatusBadge';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import {
-  DRIVER_MISSIONS,
-  MISSIONS_PER_WEEK,
-  RESPONSE_TIME_TREND,
-} from '../mockDriverData';
+  fetchDriverMissions,
+  fetchDriverStats,
+  type MissionRecord,
+  type DriverStats as DriverStatsType,
+} from '@shared/utils/driverOpsApi';
 
 import './DriverAnalytics.css';
 
@@ -250,8 +251,66 @@ export function DriverAnalytics() {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedMission, setSelectedMission] = useState<string | null>(null);
 
+  const [allMissions, setAllMissions] = useState<MissionRecord[]>([]);
+  const [apiStats, setApiStats] = useState<DriverStatsType | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = useCallback(async () => {
+    if (!driverUser?.email) return;
+    setIsLoading(true);
+    try {
+      const [missionsRes, statsRes] = await Promise.all([
+        fetchDriverMissions(driverUser.email),
+        fetchDriverStats(driverUser.email),
+      ]);
+      if (missionsRes.success) setAllMissions(missionsRes.missions);
+      if (statsRes.success) setApiStats(statsRes);
+    } catch (err) {
+      console.error('Failed to load analytics:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [driverUser?.email]);
+
+  useEffect(() => { void loadData(); }, [loadData]);
+
+  // Generate weekly chart data from missions
+  const MISSIONS_PER_WEEK = useMemo(() => {
+    const now = Date.now();
+    const weeks: { week: string; missions: number }[] = [];
+    for (let i = 7; i >= 0; i--) {
+      const start = now - (i + 1) * 7 * 86400000;
+      const end = now - i * 7 * 86400000;
+      const count = allMissions.filter((m) => {
+        const t = Date.parse(m.createdAt);
+        return t >= start && t < end;
+      }).length;
+      weeks.push({ week: `W${8 - i}`, missions: count });
+    }
+    return weeks;
+  }, [allMissions]);
+
+  // Generate response time trend from missions
+  const RESPONSE_TIME_TREND = useMemo(() => {
+    const now = Date.now();
+    const weeks: { week: string; minutes: number }[] = [];
+    for (let i = 7; i >= 0; i--) {
+      const start = now - (i + 1) * 7 * 86400000;
+      const end = now - i * 7 * 86400000;
+      const weekMissions = allMissions.filter((m) => {
+        const t = Date.parse(m.createdAt);
+        return t >= start && t < end;
+      });
+      const avg = weekMissions.length > 0
+        ? weekMissions.reduce((s, m) => s + m.responseTimeMin, 0) / weekMissions.length
+        : 0;
+      weeks.push({ week: `W${8 - i}`, minutes: Math.round(avg * 10) / 10 });
+    }
+    return weeks;
+  }, [allMissions]);
+
   const filteredMissions = useMemo(() => {
-    let missions = [...DRIVER_MISSIONS];
+    let missions = [...allMissions];
 
     if (statusFilter !== 'All') {
       missions = missions.filter((m) => m.status === statusFilter);
@@ -262,7 +321,7 @@ export function DriverAnalytics() {
       missions = missions.filter(
         (m) =>
           m.missionId.toLowerCase().includes(q) ||
-          m.patientId.toLowerCase().includes(q)
+          (m.patientPhone || '').toLowerCase().includes(q)
       );
     }
 
@@ -274,7 +333,7 @@ export function DriverAnalytics() {
     }
 
     return missions;
-  }, [statusFilter, searchQuery, timeFilter]);
+  }, [allMissions, statusFilter, searchQuery, timeFilter]);
 
   const completedMissions = useMemo(
     () => filteredMissions.filter((m) => m.status === 'Completed'),
@@ -282,15 +341,16 @@ export function DriverAnalytics() {
   );
 
   const ongoingMissions = useMemo(
-    () => DRIVER_MISSIONS.filter((m) => m.status === 'Ongoing'),
-    []
+    () => allMissions.filter((m) => m.status === 'Ongoing'),
+    [allMissions]
   );
 
   const totalMissionCount = filteredMissions.length;
-  const successRate =
+  const successRate = apiStats?.successRate ?? (
     totalMissionCount > 0
       ? (completedMissions.length / totalMissionCount) * 100
-      : 0;
+      : 0
+  );
 
   const avgResponseTime =
     filteredMissions.length > 0
@@ -347,7 +407,7 @@ export function DriverAnalytics() {
     const headers = ['Mission ID', 'Patient ID', 'Status', 'Date', 'Earnings'];
     const rows = filteredMissions.map((m) => [
       m.missionId,
-      m.patientId,
+      m.patientPhone || '',
       m.status,
       formatDate(m.createdAt),
       `₹${m.earningsInr}`,
@@ -367,6 +427,10 @@ export function DriverAnalytics() {
       window.location.hash = '/auth';
     }
     return null;
+  }
+
+  if (isLoading && allMissions.length === 0) {
+    return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading analytics data...</div>;
   }
 
   return (
@@ -771,7 +835,7 @@ export function DriverAnalytics() {
                       </span>
                       {mission.missionId}
                     </span>
-                    <span className="da-patient-id">{mission.patientId}</span>
+                    <span className="da-patient-id">{mission.patientPhone || mission.missionId.slice(0, 8)}</span>
                     <span>
                       <StatusBadge label={mission.status} />
                     </span>

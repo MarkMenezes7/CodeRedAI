@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import {
   CalendarClock,
   CheckCircle2,
@@ -41,11 +41,11 @@ import { StatusBadge } from '@modules/shared/components/StatusBadge';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import {
-  DRIVER_MISSIONS,
-  EARNINGS_PER_MONTH,
-  EARNINGS_PER_WEEK,
-  PAYOUT_HISTORY,
-} from '../mockDriverData';
+  fetchDriverMissions,
+  fetchDriverEarnings,
+  type MissionRecord,
+  type EarningsData,
+} from '@shared/utils/driverOpsApi';
 import './DriverEarnings.css';
 
 function formatDate(value: string) {
@@ -152,9 +152,32 @@ export function DriverEarnings() {
     return null;
   }
 
+  // Fetch real data
+  const [missions, setMissions] = useState<MissionRecord[]>([]);
+  const [earningsData, setEarningsData] = useState<EarningsData | null>(null);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+
+  const loadData = useCallback(async () => {
+    if (!driverUser?.email) return;
+    try {
+      const [missionsRes, earningsRes] = await Promise.all([
+        fetchDriverMissions(driverUser.email),
+        fetchDriverEarnings(driverUser.email),
+      ]);
+      if (missionsRes.success) setMissions(missionsRes.missions);
+      if (earningsRes.success) setEarningsData(earningsRes);
+    } catch (err) {
+      console.error('Failed to load earnings data:', err);
+    } finally {
+      setIsDataLoaded(true);
+    }
+  }, [driverUser?.email]);
+
+  useEffect(() => { void loadData(); }, [loadData]);
+
   const completedMissions = useMemo(
-    () => DRIVER_MISSIONS.filter((mission) => mission.status === 'Completed'),
-    []
+    () => missions.filter((m) => m.status === 'Completed'),
+    [missions]
   );
 
   const earningRows = useMemo(
@@ -180,22 +203,15 @@ export function DriverEarnings() {
   const startOfWeek = new Date(now);
   startOfWeek.setDate(now.getDate() - 7);
 
-  const totalEarnings = earningRows.reduce((sum, row) => sum + row.total, 0);
-  const thisMonthEarnings = earningRows
-    .filter((row) => {
-      const d = new Date(row.mission.createdAt);
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    })
-    .reduce((sum, row) => sum + row.total, 0);
-  const thisWeekEarnings = earningRows
-    .filter((row) => new Date(row.mission.createdAt) >= startOfWeek)
-    .reduce((sum, row) => sum + row.total, 0);
-  const pendingPayout = earningRows
-    .filter((row) => row.mission.payoutStatus === 'Pending')
-    .reduce((sum, row) => sum + row.total, 0);
-  const totalBonuses = earningRows.reduce((sum, row) => sum + row.bonus, 0);
-  const avgPerMission =
-    earningRows.length > 0 ? Math.round(totalEarnings / earningRows.length) : 0;
+  const totalEarnings = earningsData?.totalEarnings ?? earningRows.reduce((sum, row) => sum + row.total, 0);
+  const thisMonthEarnings = earningsData?.thisMonthEarnings ?? 0;
+  const thisWeekEarnings = earningsData?.thisWeekEarnings ?? 0;
+  const pendingPayout = earningsData?.pendingPayout ?? 0;
+  const totalBonuses = earningsData?.totalBonuses ?? earningRows.reduce((sum, row) => sum + row.bonus, 0);
+  const avgPerMission = earningsData?.avgPerMission ?? (earningRows.length > 0 ? Math.round(totalEarnings / earningRows.length) : 0);
+  const EARNINGS_PER_WEEK = earningsData?.weeklyChart ?? [];
+  // Monthly data derived from weekly
+  const EARNINGS_PER_MONTH = EARNINGS_PER_WEEK;
 
   const bonusDistribution = useMemo(() => {
     const goldenHour = earningRows.filter((r) => r.mission.goldenHourMet).length;
@@ -216,7 +232,7 @@ export function DriverEarnings() {
       rows = rows.filter(
         (r) =>
           r.mission.missionId.toLowerCase().includes(q) ||
-          r.mission.patientId.toLowerCase().includes(q)
+          (r.mission.patientPhone || '').toLowerCase().includes(q)
       );
     }
 
@@ -288,7 +304,7 @@ export function DriverEarnings() {
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    setTimeout(() => setIsRefreshing(false), 1500);
+    loadData().finally(() => setIsRefreshing(false));
   };
 
   const SortIcon = ({ field }: { field: string }) => {
@@ -350,10 +366,13 @@ export function DriverEarnings() {
       bgGradient: 'linear-gradient(135deg, #ecfeff 0%, #cffafe 100%)',
     },
   ];
+  if (!isDataLoaded) {
+    return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading earnings data...</div>;
+  }
 
   return (
     <DriverLayout
-      missionActive={DRIVER_MISSIONS.some((m) => m.status === 'Ongoing')}
+      missionActive={missions.some((m) => m.status === 'Ongoing')}
       pickupCount={0}
       onLogout={logoutDriverUser}
     >
@@ -728,7 +747,7 @@ export function DriverEarnings() {
                     >
                       <td className="de-cell-id">{row.mission.missionId}</td>
                       <td>{formatDate(row.mission.createdAt)}</td>
-                      <td>{row.mission.patientId}</td>
+                      <td>{row.mission.patientPhone || row.mission.missionId.slice(0, 8)}</td>
                       <td>
                         <span className="de-cell-badge de-cell-distance">
                           {row.mission.distanceKm.toFixed(1)} km
@@ -884,9 +903,9 @@ export function DriverEarnings() {
             </div>
           </div>
           <div className="de-payout-list">
-            {PAYOUT_HISTORY.map((payout, index) => (
+            {earningRows.slice(0, 5).map((row, index) => (
               <div
-                key={payout.id}
+                key={row.mission.missionId}
                 className="de-payout-card"
                 style={{ animationDelay: `${index * 60}ms` }}
               >
@@ -895,13 +914,13 @@ export function DriverEarnings() {
                     <Banknote size={18} />
                   </div>
                   <div>
-                    <p className="de-payout-amount">{formatCurrency(payout.amountInr)}</p>
-                    <p className="de-payout-date">{formatDate(payout.date)}</p>
+                    <p className="de-payout-amount">{formatCurrency(row.total)}</p>
+                    <p className="de-payout-date">{formatDate(row.mission.createdAt)}</p>
                   </div>
                 </div>
                 <div className="de-payout-card-right">
-                  <span className="de-payout-mode">{payout.mode}</span>
-                  <StatusBadge label={payout.status} />
+                  <span className="de-payout-mode">Bank Transfer</span>
+                  <StatusBadge label={row.mission.payoutStatus} />
                 </div>
               </div>
             ))}

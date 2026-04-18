@@ -84,6 +84,81 @@ export interface LocationUpdateResponse {
   message: string;
 }
 
+// ─── Mission History ───────────────────────────────────────
+export interface MissionRecord {
+  missionId: string;
+  createdAt: string;
+  completedAt: string | null;
+  patientPhone: string;
+  patientAddress: string;
+  patientLat: number | null;
+  patientLng: number | null;
+  emergencyType: string;
+  severity: string;
+  priority: string;
+  status: string;
+  rawStatus: string;
+  distanceKm: number;
+  durationMin: number;
+  responseTimeMin: number;
+  basePay: number;
+  bonus: number;
+  earningsInr: number;
+  goldenHourMet: boolean;
+  payoutStatus: string;
+  assignedHospital: string | null;
+  assignedHospitalName: string | null;
+}
+
+export interface MissionsResponse {
+  success: boolean;
+  count: number;
+  missions: MissionRecord[];
+}
+
+// ─── Earnings ──────────────────────────────────────────────
+export interface EarningsData {
+  success: boolean;
+  totalEarnings: number;
+  thisWeekEarnings: number;
+  thisMonthEarnings: number;
+  pendingPayout: number;
+  totalBonuses: number;
+  avgPerMission: number;
+  weeklyChart: { week: string; amount: number }[];
+  completedMissions: number;
+}
+
+// ─── Stats ─────────────────────────────────────────────────
+export interface DriverStats {
+  success: boolean;
+  totalMissions: number;
+  completedMissions: number;
+  ongoingMissions: number;
+  cancelledMissions: number;
+  totalEarnings: number;
+  totalDistance: number;
+  avgResponseTimeMin: number;
+  goldenHourRate: number;
+  successRate: number;
+}
+
+// ─── Profile ───────────────────────────────────────────────
+export interface DriverProfile {
+  success: boolean;
+  driver_id: string;
+  name: string;
+  email: string;
+  phone: string;
+  dispatch_status: string;
+  call_sign: string;
+  vehicle_id: string;
+  joined_at: string | null;
+  settings: Record<string, unknown>;
+}
+
+// ─── Existing API Functions ────────────────────────────────
+
 export async function pingDriverLocation(payload: DriverLocationUpdate): Promise<LocationUpdateResponse> {
   return apiRequest<LocationUpdateResponse>('/api/driver/location', {
     method: 'POST',
@@ -120,6 +195,46 @@ export async function fetchActiveMission(driverId: string): Promise<ActiveMissio
 export async function updateMissionStatus(payload: MissionStatusUpdate): Promise<MissionUpdateResponse> {
   return apiRequest<MissionUpdateResponse>('/api/driver/mission/update', {
     method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+// ─── New API Functions ─────────────────────────────────────
+
+export async function fetchDriverMissions(driverId: string): Promise<MissionsResponse> {
+  return apiRequest<MissionsResponse>(`/api/driver/missions?driver_id=${encodeURIComponent(driverId)}`, {
+    method: 'GET',
+  });
+}
+
+export async function fetchDriverEarnings(driverId: string): Promise<EarningsData> {
+  return apiRequest<EarningsData>(`/api/driver/earnings?driver_id=${encodeURIComponent(driverId)}`, {
+    method: 'GET',
+  });
+}
+
+export async function fetchDriverStats(driverId: string): Promise<DriverStats> {
+  return apiRequest<DriverStats>(`/api/driver/stats?driver_id=${encodeURIComponent(driverId)}`, {
+    method: 'GET',
+  });
+}
+
+export async function fetchDriverProfile(driverId: string): Promise<DriverProfile> {
+  return apiRequest<DriverProfile>(`/api/driver/profile?driver_id=${encodeURIComponent(driverId)}`, {
+    method: 'GET',
+  });
+}
+
+export async function updateDriverProfileApi(payload: { driver_id: string; name?: string; phone?: string }): Promise<{ success: boolean; message: string }> {
+  return apiRequest<{ success: boolean; message: string }>('/api/driver/profile', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateDriverSettingsApi(payload: Record<string, unknown> & { driver_id: string }): Promise<{ success: boolean; message: string }> {
+  return apiRequest<{ success: boolean; message: string }>('/api/driver/settings', {
+    method: 'PUT',
     body: JSON.stringify(payload),
   });
 }
