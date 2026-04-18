@@ -1,28 +1,14 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
 
-import {
-  grantAdminAuthUnlock,
-  readStoredAdminSession,
-  resolveAuthenticatedRole,
-} from '@/utils/redirectByRole';
-import { useHospitalAuth } from '@shared/providers/AuthContext';
+import { grantAdminAuthUnlock } from '@/utils/redirectByRole';
 import './AppNavbar.css';
 
 const ADMIN_BRAND_TAP_TARGET = 5;
 const ADMIN_BRAND_TAP_RESET_MS = 8000;
 
 export function AppNavbar() {
-  const { driverUser, hospitalUser, isDriverAuthenticated, isHospitalAuthenticated } = useHospitalAuth();
   const brandTapCountRef = useRef(0);
   const brandTapResetTimerRef = useRef<number | null>(null);
-
-  const authenticatedRole = resolveAuthenticatedRole({
-    isHospitalAuthenticated: Boolean(isHospitalAuthenticated && hospitalUser),
-    isDriverAuthenticated: Boolean(isDriverAuthenticated && driverUser),
-    hasAdminSession: Boolean(readStoredAdminSession()),
-  });
-
-  const showAuthCta = !authenticatedRole;
 
   useEffect(() => {
     return () => {
@@ -77,11 +63,9 @@ export function AppNavbar() {
         </a>
 
         <div className="app-navbar-actions">
-          {showAuthCta ? (
-            <a className="app-navbar-auth" href="#/auth">
-              Join Us
-            </a>
-          ) : null}
+          <a className="app-navbar-auth" href="#/auth">
+            Join Us
+          </a>
 
           <a
             className="app-navbar-emergency"
