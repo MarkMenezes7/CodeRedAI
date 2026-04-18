@@ -11,6 +11,12 @@ type LocationStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 type Severity = 'critical' | 'high' | 'moderate' | 'low';
 
+type CapturedLocation = {
+  lat: number;
+  lng: number;
+  accuracyMeters: number;
+};
+
 const severityPool: Severity[] = ['high', 'critical', 'moderate'];
 
 const CAR_PRESET_DATA: Record<
@@ -77,6 +83,23 @@ function randomSeverity(): Severity {
   return severityPool[Math.floor(Math.random() * severityPool.length)] ?? 'high';
 }
 
+function describeGeoError(error: unknown) {
+  const geoError = error as GeolocationPositionError | null;
+  if (!geoError || typeof geoError.code !== 'number') {
+    return 'Could not capture current location. Please retry.';
+  }
+
+  if (geoError.code === geoError.PERMISSION_DENIED) {
+    return 'Location access denied. Allow permission and activate airbags again.';
+  }
+
+  if (geoError.code === geoError.TIMEOUT) {
+    return 'Location request timed out. Activate airbags again.';
+  }
+
+  return 'Could not capture current location. Please retry.';
+}
+
 export default function CarSitePage() {
   const [selectedModel, setSelectedModel] = useState('');
   const [personName, setPersonName] = useState('');
@@ -96,6 +119,32 @@ export default function CarSitePage() {
   const selectedPreset = useMemo(() => CAR_PRESET_DATA[selectedModel], [selectedModel]);
 
   const canSend = Boolean(selectedPreset && location && locationStatus === 'ready' && !isSubmitting);
+
+  const captureCurrentLocation = () =>
+    new Promise<CapturedLocation>((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation is not supported in this browser.'));
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            lat: Number(position.coords.latitude.toFixed(6)),
+            lng: Number(position.coords.longitude.toFixed(6)),
+            accuracyMeters: Math.max(0, Math.round(position.coords.accuracy || 0)),
+          });
+        },
+        (error) => {
+          reject(error);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15_000,
+          maximumAge: 0,
+        },
+      );
+    });
 
   const refreshAlerts = async () => {
     setIsLoadingAlerts(true);
@@ -144,17 +193,9 @@ export default function CarSitePage() {
     setDispatchMessage('Vehicle selected. Activate airbags to capture location.');
   };
 
-  const handleActivateAirbags = () => {
+  const handleActivateAirbags = async () => {
     if (!selectedPreset) {
       setDispatchMessage('Select a car model first.');
-      return;
-    }
-
-    if (!navigator.geolocation) {
-      setLocation(null);
-      setLocationStatus('error');
-      setLocationMessage('Geolocation is not supported in this browser.');
-      setDispatchMessage('Unable to capture GPS on this device.');
       return;
     }
 
@@ -162,40 +203,20 @@ export default function CarSitePage() {
     setLocationStatus('loading');
     setLocationMessage('Capturing current location. Please allow location access.');
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const nextLocation = {
-          lat: Number(position.coords.latitude.toFixed(6)),
-          lng: Number(position.coords.longitude.toFixed(6)),
-        };
-
-        setLocation(nextLocation);
-        setLocationStatus('ready');
-        setLocationMessage(
-          `Location captured: Lat ${nextLocation.lat.toFixed(6)}, Lng ${nextLocation.lng.toFixed(6)}`,
-        );
-        setDispatchMessage('Airbags activated. GPS locked and ready for dispatch.');
-      },
-      (error) => {
-        setLocation(null);
-        setLocationStatus('error');
-
-        if (error.code === error.PERMISSION_DENIED) {
-          setLocationMessage('Location access denied. Allow permission and activate airbags again.');
-        } else if (error.code === error.TIMEOUT) {
-          setLocationMessage('Location request timed out. Activate airbags again.');
-        } else {
-          setLocationMessage('Could not capture current location. Please retry.');
-        }
-
-        setDispatchMessage('GPS capture failed. Please try again.');
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10_000,
-        maximumAge: 0,
-      },
-    );
+    try {
+      const nextLocation = await captureCurrentLocation();
+      setLocation({ lat: nextLocation.lat, lng: nextLocation.lng });
+      setLocationStatus('ready');
+      setLocationMessage(
+        `Location captured: Lat ${nextLocation.lat.toFixed(6)}, Lng ${nextLocation.lng.toFixed(6)} (Accuracy ±${nextLocation.accuracyMeters}m)`,
+      );
+      setDispatchMessage('Airbags activated. Live GPS locked and ready for dispatch.');
+    } catch (error) {
+      setLocation(null);
+      setLocationStatus('error');
+      setLocationMessage(describeGeoError(error));
+      setDispatchMessage('GPS capture failed. Please try again.');
+    }
   };
 
   const handleSendAlert = async () => {
@@ -204,12 +225,30 @@ export default function CarSitePage() {
       return;
     }
 
-    if (!location) {
-      setDispatchMessage('Activate airbags first so location can be attached.');
-      return;
-    }
-
     setIsSubmitting(true);
+    let dispatchLocation = location;
+
+    setDispatchMessage('Refreshing live GPS before sending alert...');
+
+    try {
+      const liveLocation = await captureCurrentLocation();
+      dispatchLocation = { lat: liveLocation.lat, lng: liveLocation.lng };
+      setLocation(dispatchLocation);
+      setLocationStatus('ready');
+      setLocationMessage(
+        `Location captured: Lat ${liveLocation.lat.toFixed(6)}, Lng ${liveLocation.lng.toFixed(6)} (Accuracy ±${liveLocation.accuracyMeters}m)`,
+      );
+    } catch (error) {
+      if (!dispatchLocation) {
+        setLocationStatus('error');
+        setLocationMessage(describeGeoError(error));
+        setDispatchMessage('Unable to capture current GPS. Activate airbags and try again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      setDispatchMessage('Live GPS refresh failed. Using last captured location for this alert.');
+    }
 
     try {
       const created = await createCarAccidentAlert({
@@ -217,15 +256,17 @@ export default function CarSitePage() {
         carModel: selectedPreset.carModel,
         personName: personName.trim() || selectedPreset.personName,
         personPhone: personPhone.trim() || selectedPreset.personPhone,
-        lat: location.lat,
-        lng: location.lng,
+        lat: dispatchLocation.lat,
+        lng: dispatchLocation.lng,
         severity: randomSeverity(),
         airbagsActivated: true,
         notes: 'Created from integrated car site in frontend module.',
       });
 
       setAlerts((previous) => [created.alert, ...previous.filter((item) => item.id !== created.alert.id)].slice(0, 50));
-      setDispatchMessage(created.message);
+      setDispatchMessage(
+        `${created.message} Location used: ${dispatchLocation.lat.toFixed(6)}, ${dispatchLocation.lng.toFixed(6)}.`,
+      );
       setLocation(null);
       setLocationStatus('idle');
       setLocationMessage('Location pending. Click Activate Airbags to capture current GPS.');

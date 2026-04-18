@@ -13,6 +13,13 @@ const LAT_KM = 111;
 const MAX_EVENTS = 60;
 
 const ROAD_NODES: Array<{ id: string; point: GeoPoint }> = [
+  { id: 'karuna_borivali', point: { lat: 19.2412, lng: 72.8530 } },
+  { id: 'borivali_station_e', point: { lat: 19.2296, lng: 72.8572 } },
+  { id: 'borivali_national_park', point: { lat: 19.2311, lng: 72.8618 } },
+  { id: 'dahisar_check_naka', point: { lat: 19.2507, lng: 72.8590 } },
+  { id: 'kandivali_station_e', point: { lat: 19.2052, lng: 72.8519 } },
+  { id: 'kandivali_thakur_village', point: { lat: 19.2107, lng: 72.8728 } },
+  { id: 'goregaon_station_e', point: { lat: 19.1669, lng: 72.8617 } },
   { id: 'andheri_station_e', point: { lat: 19.1197, lng: 72.8477 } },
   { id: 'midc_central', point: { lat: 19.1142, lng: 72.8599 } },
   { id: 'chakala_metro', point: { lat: 19.1092, lng: 72.8745 } },
@@ -26,7 +33,14 @@ const ROAD_NODES: Array<{ id: string; point: GeoPoint }> = [
 ];
 
 const ROAD_GRAPH: Record<string, string[]> = {
-  andheri_station_e: ['midc_central', 'chakala_metro'],
+  karuna_borivali: ['borivali_station_e', 'borivali_national_park', 'dahisar_check_naka'],
+  borivali_station_e: ['karuna_borivali', 'borivali_national_park', 'kandivali_station_e'],
+  borivali_national_park: ['karuna_borivali', 'borivali_station_e', 'kandivali_thakur_village'],
+  dahisar_check_naka: ['karuna_borivali'],
+  kandivali_station_e: ['borivali_station_e', 'kandivali_thakur_village', 'goregaon_station_e'],
+  kandivali_thakur_village: ['borivali_national_park', 'kandivali_station_e', 'goregaon_station_e'],
+  goregaon_station_e: ['kandivali_station_e', 'kandivali_thakur_village', 'andheri_station_e'],
+  andheri_station_e: ['midc_central', 'chakala_metro', 'goregaon_station_e'],
   midc_central: ['andheri_station_e', 'chakala_metro', 'sahar_road'],
   chakala_metro: ['andheri_station_e', 'midc_central', 'marol_naka', 'sahar_road'],
   marol_naka: ['chakala_metro', 'saki_naka', 'jvlr_junction'],
@@ -55,6 +69,10 @@ const incomingSymptoms = [
 ];
 
 const incomingAreas = [
+  { label: 'Karuna Hospital Borivali', lat: 19.2412, lng: 72.8530 },
+  { label: 'Borivali station east', lat: 19.2296, lng: 72.8572 },
+  { label: 'Dahisar check naka', lat: 19.2507, lng: 72.8590 },
+  { label: 'Kandivali station east', lat: 19.2052, lng: 72.8519 },
   { label: 'Saki Naka junction', lat: 19.1004, lng: 72.8862 },
   { label: 'Andheri station east', lat: 19.1197, lng: 72.8477 },
   { label: 'Powai lake entry gate', lat: 19.1176, lng: 72.9077 },
@@ -133,6 +151,47 @@ function nearestRoadNodeId(point: GeoPoint): string {
   }
 
   return bestNodeId;
+}
+
+function roadNodesByDistance(origin: GeoPoint) {
+  return ROAD_NODES
+    .map((node) => ({
+      id: node.id,
+      point: node.point,
+      distanceKm: distanceKm(origin, node.point),
+    }))
+    .sort((left, right) => left.distanceKm - right.distanceKm);
+}
+
+export function createRoadAnchorAssignments(params: {
+  hospitalLocation: GeoPoint;
+  count: number;
+  closeShare?: number;
+}): GeoPoint[] {
+  const { hospitalLocation, count, closeShare = 0.25 } = params;
+  if (count <= 0) {
+    return [];
+  }
+
+  const sortedNodes = roadNodesByDistance(hospitalLocation);
+  const closeNodes = sortedNodes.filter((node) => node.distanceKm <= 1.1);
+  const farNodes = sortedNodes.filter((node) => node.distanceKm > 0.7);
+
+  const fallbackNodes = sortedNodes.slice(0, Math.max(1, Math.min(sortedNodes.length, 6)));
+  const closePool = (closeNodes.length > 0 ? closeNodes : fallbackNodes).map((node) => clonePoint(node.point));
+  const farPool = (farNodes.length > 0 ? farNodes : sortedNodes).map((node) => clonePoint(node.point));
+
+  const normalizedShare = clamp(closeShare, 0, 1);
+  const closeCount = clamp(Math.round(count * normalizedShare), 0, count);
+
+  return Array.from({ length: count }, (_, index) => {
+    if (index < closeCount) {
+      return clonePoint(closePool[index % closePool.length]);
+    }
+
+    const farIndex = index - closeCount;
+    return clonePoint(farPool[farIndex % farPool.length]);
+  });
 }
 
 function shortestRoadNodePath(startNodeId: string, endNodeId: string): string[] {
@@ -217,6 +276,17 @@ export function routeDistanceKm(route: GeoPoint[]): number {
   }
 
   return sum;
+}
+
+export function snapPointToRoad(point: GeoPoint): GeoPoint {
+  const nodeId = nearestRoadNodeId(point);
+  const nodePoint = roadNodeLookup.get(nodeId);
+
+  if (!nodePoint) {
+    return clonePoint(point);
+  }
+
+  return clonePoint(nodePoint);
 }
 
 export function buildRoadRoute(start: GeoPoint, end: GeoPoint): GeoPoint[] {
@@ -405,19 +475,26 @@ function mergeEvents(existingEvents: OpsEvent[], incomingEvents: OpsEvent[]) {
   return [...incomingEvents.reverse(), ...existingEvents].slice(0, MAX_EVENTS);
 }
 
-function nudgeAvailableDriver(driver: DriverUnit, hospitalLocation: { lat: number; lng: number }) {
-  const drifted = {
-    lat: driver.location.lat + randomBetween(-0.0008, 0.0008),
-    lng: driver.location.lng + randomBetween(-0.0011, 0.0011),
-  };
+function nudgeAvailableDriver(driver: DriverUnit, targetAnchor: GeoPoint) {
+  const currentPoint = snapPointToRoad(driver.location);
+  const targetPoint = snapPointToRoad(targetAnchor);
 
-  const radiusKm = 3.5;
-  const distFromHub = distanceKm(drifted, hospitalLocation);
-  if (distFromHub <= radiusKm) {
-    return drifted;
+  if (distanceKm(currentPoint, targetPoint) <= 0.03) {
+    return clonePoint(targetPoint);
   }
 
-  return moveToward(drifted, hospitalLocation, distFromHub - radiusKm + 0.2);
+  const patrolRoute = buildRoadRoute(currentPoint, targetPoint);
+  const movementKm = Math.max(
+    0.06,
+    (Math.max(driver.speedKmph, 24) * Math.max(driver.pingIntervalSec, 4)) / 3600,
+  );
+
+  const progress = advanceAlongRoute(currentPoint, patrolRoute, 1, movementKm);
+  if (progress.reached) {
+    return clonePoint(targetPoint);
+  }
+
+  return progress.position;
 }
 
 export function runDriverPingCycle(state: HospitalOpsState, pingSeconds = 5): HospitalOpsState {
@@ -425,6 +502,16 @@ export function runDriverPingCycle(state: HospitalOpsState, pingSeconds = 5): Ho
   const requests = state.requests.map((request) => ({ ...request, location: { ...request.location } }));
   const requestLookup = new Map(requests.map((request) => [request.id, request]));
   const freshEvents: OpsEvent[] = [];
+
+  const idleDrivers = state.drivers
+    .filter((driver) => driver.status === 'available' && !driver.occupied && !driver.assignment)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const idleAnchors = createRoadAnchorAssignments({
+    hospitalLocation: state.hospital.location,
+    count: idleDrivers.length,
+    closeShare: 0.28,
+  });
+  const idleAnchorByDriverId = new Map(idleDrivers.map((driver, index) => [driver.id, idleAnchors[index]]));
 
   const beds = { ...state.hospital.beds };
 
@@ -461,9 +548,10 @@ export function runDriverPingCycle(state: HospitalOpsState, pingSeconds = 5): Ho
     }
 
     if (updatedDriver.status === 'available') {
+      const targetAnchor = idleAnchorByDriverId.get(updatedDriver.id) ?? state.hospital.location;
       updatedDriver = {
         ...updatedDriver,
-        location: nudgeAvailableDriver(updatedDriver, state.hospital.location),
+        location: nudgeAvailableDriver(updatedDriver, targetAnchor),
         occupied: false,
         etaMinutes: undefined,
         speedKmph: clamp(updatedDriver.speedKmph + randomInt(-3, 3), 25, 56),

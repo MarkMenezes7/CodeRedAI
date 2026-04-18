@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { LatLngBoundsExpression } from 'leaflet';
 import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
 
@@ -21,8 +21,26 @@ interface MapViewProps {
   selectedRequestId: string | null;
   onSelectDriver: (driverId: string) => void;
   onSelectRequest: (requestId: string) => void;
+  onAcceptRequest?: (requestId: string) => void;
+  onRejectRequest?: (requestId: string) => void;
   onSuggestClosestDriver?: (requestId: string) => void;
   suggestedDriversByRequest?: Record<string, string>;
+}
+
+type MapFocusMode = 'patient' | 'ambulance' | 'to_patient' | 'to_hospital';
+
+interface MapFocusTarget {
+  id: string;
+  lat: number;
+  lng: number;
+  kind: 'request' | 'driver';
+}
+
+interface MapFlyTarget {
+  lat: number;
+  lng: number;
+  zoom: number;
+  key: string;
 }
 
 const driverStatusLabel: Record<DriverStatus, string> = {
@@ -90,6 +108,23 @@ function FitToMarkers({ bounds }: { bounds: LatLngBoundsExpression }) {
   return null;
 }
 
+function FlyToTarget({ target }: { target: MapFlyTarget | null }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!target) {
+      return;
+    }
+
+    map.flyTo([target.lat, target.lng], target.zoom, {
+      animate: true,
+      duration: 0.9,
+    });
+  }, [map, target]);
+
+  return null;
+}
+
 export function MapView({
   hospital,
   drivers,
@@ -98,17 +133,62 @@ export function MapView({
   selectedRequestId,
   onSelectDriver,
   onSelectRequest,
+  onAcceptRequest,
+  onRejectRequest,
   onSuggestClosestDriver,
   suggestedDriversByRequest,
 }: MapViewProps) {
+  const [focusMode, setFocusMode] = useState<MapFocusMode | null>(null);
+  const [focusIndexByMode, setFocusIndexByMode] = useState<Record<MapFocusMode, number>>({
+    patient: -1,
+    ambulance: -1,
+    to_patient: -1,
+    to_hospital: -1,
+  });
+  const [mapFlyTarget, setMapFlyTarget] = useState<MapFlyTarget | null>(null);
+
   const visibleRequests = useMemo(
     () => requests.filter((request) => request.status !== 'completed' && request.status !== 'cancelled'),
     [requests],
   );
 
   const requestById = useMemo(
-    () => new Map(visibleRequests.map((request) => [request.id, request])),
+    () => new globalThis.Map(visibleRequests.map((request) => [request.id, request])),
     [visibleRequests],
+  );
+
+  const focusTargetsByMode = useMemo<Record<MapFocusMode, MapFocusTarget[]>>(
+    () => ({
+      patient: visibleRequests.map((request) => ({
+        id: request.id,
+        lat: request.location.lat,
+        lng: request.location.lng,
+        kind: 'request',
+      })),
+      ambulance: drivers.map((driver) => ({
+        id: driver.id,
+        lat: driver.location.lat,
+        lng: driver.location.lng,
+        kind: 'driver',
+      })),
+      to_patient: drivers
+        .filter((driver) => driver.status === 'to_patient')
+        .map((driver) => ({
+          id: driver.id,
+          lat: driver.location.lat,
+          lng: driver.location.lng,
+          kind: 'driver',
+        })),
+      to_hospital: drivers
+        .filter((driver) => driver.status === 'to_hospital')
+        .map((driver) => ({
+          id: driver.id,
+          lat: driver.location.lat,
+          lng: driver.location.lng,
+          kind: 'driver',
+        })),
+    }),
+    [drivers, visibleRequests],
   );
 
   const bounds = useMemo<LatLngBoundsExpression>(() => {
@@ -169,6 +249,73 @@ export function MapView({
     [hospital.location.lat, hospital.location.lng],
   );
 
+  const handlePopupSelectRequest = (event: MouseEvent<HTMLButtonElement>, requestId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelectRequest(requestId);
+  };
+
+  const handlePopupAcceptRequest = (event: MouseEvent<HTMLButtonElement>, requestId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onAcceptRequest?.(requestId);
+  };
+
+  const handlePopupRejectRequest = (event: MouseEvent<HTMLButtonElement>, requestId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onRejectRequest?.(requestId);
+  };
+
+  const handlePopupSuggestClosest = (event: MouseEvent<HTMLButtonElement>, requestId: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSuggestClosestDriver?.(requestId);
+  };
+
+  const cycleFocusMode = useCallback(
+    (mode: MapFocusMode) => {
+      const targets = focusTargetsByMode[mode];
+      if (!targets.length) {
+        return;
+      }
+
+      const previousIndex = focusMode === mode ? focusIndexByMode[mode] : -1;
+      const nextIndex = (previousIndex + 1) % targets.length;
+      const nextTarget = targets[nextIndex];
+
+      setFocusMode(mode);
+      setFocusIndexByMode((previous) => ({
+        ...previous,
+        [mode]: nextIndex,
+      }));
+
+      if (nextTarget.kind === 'request') {
+        onSelectRequest(nextTarget.id);
+      } else {
+        onSelectDriver(nextTarget.id);
+      }
+
+      setMapFlyTarget({
+        lat: nextTarget.lat,
+        lng: nextTarget.lng,
+        zoom: 16,
+        key: `${mode}-${nextTarget.id}-${Date.now()}`,
+      });
+    },
+    [focusIndexByMode, focusMode, focusTargetsByMode, onSelectDriver, onSelectRequest],
+  );
+
+  const clearFocusMode = useCallback(() => {
+    setFocusMode(null);
+    setMapFlyTarget({
+      lat: hospital.location.lat,
+      lng: hospital.location.lng,
+      zoom: 13,
+      key: `clear-${Date.now()}`,
+    });
+  }, [hospital.location.lat, hospital.location.lng]);
+
   return (
     <div className="map-view">
       <div className="map-canvas" aria-label="Live hospital fleet map" role="region">
@@ -185,6 +332,7 @@ export function MapView({
           />
 
           <FitToMarkers bounds={bounds} />
+          <FlyToTarget target={mapFlyTarget} />
 
           <CircleMarker
             center={[hospital.location.lat, hospital.location.lng]}
@@ -254,11 +402,21 @@ export function MapView({
                   ) : null}
 
                   <div className="map-popup-actions">
-                    <button type="button" onClick={() => onSelectRequest(request.id)}>
+                    <button type="button" className="map-popup-btn map-popup-btn-neutral" onClick={(event) => handlePopupSelectRequest(event, request.id)}>
                       Select Request
                     </button>
+                    {onAcceptRequest ? (
+                      <button type="button" className="map-popup-btn map-popup-btn-accept" onClick={(event) => handlePopupAcceptRequest(event, request.id)}>
+                        Accept Request
+                      </button>
+                    ) : null}
+                    {onRejectRequest ? (
+                      <button type="button" className="map-popup-btn map-popup-btn-reject" onClick={(event) => handlePopupRejectRequest(event, request.id)}>
+                        Reject Request
+                      </button>
+                    ) : null}
                     {onSuggestClosestDriver ? (
-                      <button type="button" onClick={() => onSuggestClosestDriver(request.id)}>
+                      <button type="button" className="map-popup-btn map-popup-btn-neutral" onClick={(event) => handlePopupSuggestClosest(event, request.id)}>
                         Auto Select Closest
                       </button>
                     ) : null}
@@ -294,6 +452,40 @@ export function MapView({
             </CircleMarker>
           ))}
         </MapContainer>
+
+        <div className="map-focus-controls" role="group" aria-label="Map focus controls">
+          <button
+            type="button"
+            className={`map-focus-btn${focusMode === 'patient' ? ' active' : ''}`}
+            onClick={() => cycleFocusMode('patient')}
+          >
+            Patient ({focusTargetsByMode.patient.length})
+          </button>
+          <button
+            type="button"
+            className={`map-focus-btn${focusMode === 'ambulance' ? ' active' : ''}`}
+            onClick={() => cycleFocusMode('ambulance')}
+          >
+            Ambulance ({focusTargetsByMode.ambulance.length})
+          </button>
+          <button
+            type="button"
+            className={`map-focus-btn${focusMode === 'to_patient' ? ' active' : ''}`}
+            onClick={() => cycleFocusMode('to_patient')}
+          >
+            Going to Patient ({focusTargetsByMode.to_patient.length})
+          </button>
+          <button
+            type="button"
+            className={`map-focus-btn${focusMode === 'to_hospital' ? ' active' : ''}`}
+            onClick={() => cycleFocusMode('to_hospital')}
+          >
+            Going to Hospital ({focusTargetsByMode.to_hospital.length})
+          </button>
+          <button type="button" className="map-focus-btn map-focus-btn-clear" onClick={clearFocusMode}>
+            Clear Focus
+          </button>
+        </div>
 
         <p className="map-note">
           Mumbai live view with real map tiles and road-aligned ambulance movement on each ping cycle.

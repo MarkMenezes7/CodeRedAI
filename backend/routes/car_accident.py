@@ -5,23 +5,37 @@ from pymongo.errors import PyMongoError
 
 try:
     from ..schemas.car_accident import (
+        CarAccidentActionResponse,
         CreateCarAccidentRequest,
         CreateCarAccidentResponse,
+        DriverOfferActionRequest,
+        HospitalOfferActionRequest,
         ListCarAccidentsResponse,
     )
     from ..services.car_accident_service import (
+        accept_driver_for_alert,
+        accept_hospital_for_alert,
         create_car_accident_alert,
         list_car_accident_alerts,
+        reject_driver_for_alert,
+        reject_hospital_for_alert,
     )
 except ImportError:  # pragma: no cover - compatibility for `uvicorn main:app`
     from schemas.car_accident import (
+        CarAccidentActionResponse,
         CreateCarAccidentRequest,
         CreateCarAccidentResponse,
+        DriverOfferActionRequest,
+        HospitalOfferActionRequest,
         ListCarAccidentsResponse,
     )
     from services.car_accident_service import (
+        accept_driver_for_alert,
+        accept_hospital_for_alert,
         create_car_accident_alert,
         list_car_accident_alerts,
+        reject_driver_for_alert,
+        reject_hospital_for_alert,
     )
 
 router = APIRouter()
@@ -75,4 +89,80 @@ async def list_car_accidents_endpoint(
         "success": True,
         "count": len(alerts),
         "alerts": alerts,
+    }
+
+
+@router.post("/car-accidents/{alert_id}/driver/accept", response_model=CarAccidentActionResponse)
+async def accept_driver_claim_endpoint(alert_id: str, payload: DriverOfferActionRequest):
+    try:
+        result = accept_driver_for_alert(alert_id=alert_id, driver_id=payload.driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable. Could not accept driver claim.",
+        ) from exc
+
+    return {
+        "success": True,
+        "message": result["message"],
+        "alert": result["alert"],
+    }
+
+
+@router.post("/car-accidents/{alert_id}/driver/reject", response_model=CarAccidentActionResponse)
+async def reject_driver_claim_endpoint(alert_id: str, payload: DriverOfferActionRequest):
+    try:
+        result = reject_driver_for_alert(alert_id=alert_id, driver_id=payload.driver_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable. Could not reject driver claim.",
+        ) from exc
+
+    return {
+        "success": True,
+        "message": result["message"],
+        "alert": result["alert"],
+    }
+
+
+@router.post("/car-accidents/{alert_id}/hospital/accept", response_model=CarAccidentActionResponse)
+async def accept_hospital_claim_endpoint(alert_id: str, payload: HospitalOfferActionRequest):
+    try:
+        result = accept_hospital_for_alert(alert_id=alert_id, hospital_id=payload.hospital_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable. Could not accept hospital claim.",
+        ) from exc
+
+    return {
+        "success": True,
+        "message": result["message"],
+        "alert": result["alert"],
+    }
+
+
+@router.post("/car-accidents/{alert_id}/hospital/reject", response_model=CarAccidentActionResponse)
+async def reject_hospital_claim_endpoint(alert_id: str, payload: HospitalOfferActionRequest):
+    try:
+        result = reject_hospital_for_alert(alert_id=alert_id, hospital_id=payload.hospital_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database unavailable. Could not reject hospital claim.",
+        ) from exc
+
+    return {
+        "success": True,
+        "message": result["message"],
+        "alert": result["alert"],
     }

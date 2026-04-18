@@ -95,6 +95,16 @@ def _build_callsign(name: str, email: str) -> str:
 
 
 def _build_hospital_user(doc: Dict[str, Any]) -> Dict[str, Any]:
+    hospital_id = str(doc.get("hospital_id") or "").strip()
+    hospital_name = str(doc.get("name") or "").strip()
+
+    canonical_hospital_id = hospital_id
+    if not canonical_hospital_id and hospital_name.upper().startswith("HSP-"):
+        canonical_hospital_id = hospital_name.upper()
+
+    if not canonical_hospital_id:
+        canonical_hospital_id = str(doc.get("_id"))
+
     location_out = None
     if "location" in doc and doc["location"]:
         loc = doc["location"]
@@ -105,10 +115,10 @@ def _build_hospital_user(doc: Dict[str, Any]) -> Dict[str, Any]:
             location_out = loc
 
     return {
-        "id": doc.get("hospital_id") or str(doc["_id"]),
-        "name": doc.get("name") or doc.get("hospital_id", ""),
+        "id": canonical_hospital_id,
+        "name": doc.get("name") or canonical_hospital_id,
         "email": doc.get("email", ""),
-        "hospitalId": doc.get("hospital_id"),
+        "hospitalId": canonical_hospital_id,
         "bedCapacity": doc.get("bed_capacity"),
         "address": doc.get("address"),
         "location": location_out,
@@ -257,6 +267,33 @@ def signup_driver(payload: DriverSignupRequest) -> AuthResult:
             detail="Linked hospital ID is required.",
         )
 
+    driver_geojson_location: Optional[dict[str, Any]] = None
+    try:
+        linked_hospital_doc = get_hospitals_collection().find_one(
+            {"hospital_id": linked_hospital_id},
+            {"location": 1},
+        )
+    except PyMongoError as exc:
+        _raise_db_unavailable(exc)
+
+    if linked_hospital_doc:
+        linked_location = linked_hospital_doc.get("location") or {}
+        if isinstance(linked_location, dict) and linked_location.get("type") == "Point":
+            coords = linked_location.get("coordinates") or []
+            if isinstance(coords, list) and len(coords) >= 2:
+                driver_geojson_location = {
+                    "type": "Point",
+                    "coordinates": [float(coords[0]), float(coords[1])],
+                }
+        elif isinstance(linked_location, dict) and {
+            "lat",
+            "lng",
+        }.issubset(linked_location.keys()):
+            driver_geojson_location = {
+                "type": "Point",
+                "coordinates": [float(linked_location["lng"]), float(linked_location["lat"])],
+            }
+
     doc = {
         "name": payload.driverName.strip(),
         "email": email,
@@ -264,6 +301,8 @@ def signup_driver(payload: DriverSignupRequest) -> AuthResult:
         "call_sign": _build_callsign(payload.driverName, email),
         "vehicle_number": vehicle_number,
         "linked_hospital_id": linked_hospital_id,
+        "dispatch_status": "available",
+        "location": driver_geojson_location,
         "password_hash": hash_password(payload.password),
         "role": "driver",
         "created_at": now,
