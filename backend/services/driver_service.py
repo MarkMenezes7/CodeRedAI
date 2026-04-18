@@ -54,6 +54,19 @@ def _generate_offer_id() -> str:
     return f"OFR-{letters}{digits}"
 
 
+def _authenticated_driver_clauses() -> list[dict[str, Any]]:
+    """Return query clauses that represent a driver who has logged in."""
+    return [
+        {"is_logged_in": True},
+        {
+            "$and": [
+                {"last_login_at": {"$exists": True}},
+                {"last_login_at": {"$ne": None}},
+            ]
+        },
+    ]
+
+
 def _serialize_driver_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Normalize driver documents into a consistent response shape."""
     drivers: list[dict[str, Any]] = []
@@ -81,8 +94,8 @@ def _find_fallback_available_drivers(
     """
     Fallback when geo-search yields no matches.
 
-    Returns drivers that are online/available or have no dispatch status yet,
-    sorted by recent activity so a newly logged-in driver can still receive offers.
+    Returns only authenticated drivers that are online/available,
+    sorted by recent activity so a newly logged-in driver can receive offers.
     """
     projection = {
         "email": 1,
@@ -103,9 +116,14 @@ def _find_fallback_available_drivers(
         if fetch_limit <= 0:
             return []
 
-        final_query = dict(query)
+        final_query: dict[str, Any] = {
+            "$and": [
+                query,
+                {"$or": _authenticated_driver_clauses()},
+            ]
+        }
         if excluded:
-            final_query["email"] = {"$nin": excluded}
+            final_query["$and"].append({"email": {"$nin": excluded}})
 
         return list(
             get_drivers_collection()
@@ -115,24 +133,8 @@ def _find_fallback_available_drivers(
         )
 
     try:
-        # Priority 1: explicitly online/available drivers.
         online_docs = fetch_docs({"dispatch_status": {"$in": ["online", "available"]}}, limit)
         collected_docs.extend(online_docs)
-        excluded.extend([doc.get("email") for doc in online_docs if doc.get("email")])
-
-        # Priority 2: any remaining non-assigned drivers.
-        remaining = limit - len(collected_docs)
-        if remaining > 0:
-            fallback_docs = fetch_docs(
-                {
-                    "$or": [
-                        {"dispatch_status": {"$nin": ["assigned", "on_mission"]}},
-                        {"dispatch_status": {"$exists": False}},
-                    ]
-                },
-                remaining,
-            )
-            collected_docs.extend(fallback_docs)
     except PyMongoError as exc:
         _logger.error("[DRIVER FALLBACK QUERY ERROR] %s", exc)
         return []
@@ -247,7 +249,7 @@ def find_nearest_drivers(
     """
     collection = get_drivers_collection()
 
-    # Only find drivers who are online and have a GeoJSON location
+    # Only find authenticated drivers who are online/available and have a GeoJSON location.
     query: dict[str, Any] = {
         "location": {
             "$near": {
@@ -258,7 +260,8 @@ def find_nearest_drivers(
                 "$maxDistance": radius_m,
             }
         },
-        "dispatch_status": "online",
+        "dispatch_status": {"$in": ["online", "available"]},
+        "$or": _authenticated_driver_clauses(),
     }
 
     if exclude_ids:
@@ -818,7 +821,13 @@ def update_driver_settings(
         }
         # Handle dispatch_status separately if included
         if "dispatch_status" in settings:
-            update_fields["dispatch_status"] = settings.pop("dispatch_status")
+            next_status = str(settings.pop("dispatch_status") or "").strip().lower()
+            if next_status:
+                update_fields["dispatch_status"] = next_status
+                if next_status in {"offline", "unavailable"}:
+                    update_fields["is_logged_in"] = False
+                elif next_status in {"online", "available"}:
+                    update_fields["is_logged_in"] = True
         if settings:
             for k, v in settings.items():
                 update_fields[f"settings.{k}"] = v
