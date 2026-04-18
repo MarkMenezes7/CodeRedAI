@@ -1297,61 +1297,11 @@ export function LiveMission() {
     speak('You have arrived at pickup location. Please confirm pickup.', true);
   }, [showMarkAsPickedButton, speak, stopSimulation]);
 
-  const handleMarkAsPicked = useCallback(() => {
-    if (!mission || !effectiveDriverPosition || isResolvingNearestHospital) {
+  /** Fallback hospital lookup via Mapbox Geocoding when backend has no hospital data */
+  const _fallbackToMapboxHospitalLookup = useCallback(() => {
+    if (!effectiveDriverPosition || !MAPBOX_TOKEN) {
+      setIsResolvingNearestHospital(false);
       return;
-    }
-
-    if (!MAPBOX_TOKEN) {
-      setRouteError('Mapbox token missing. Cannot find nearest hospital.');
-      return;
-    }
-
-    setMissionStatus('picked_up');
-    stopSimulation();
-    setRouteData(null);
-    setNavStepIndex(0);
-    announced200Ref.current.clear();
-    announced50Ref.current.clear();
-    straightAnnouncedRef.current.clear();
-    lastFetchRef.current = null;
-    setRetryNonce((value) => value + 1);
-    setRouteError(null);
-    setIsResolvingNearestHospital(true);
-    speak('Patient on board. Finding nearest hospital.', true);
-
-    if (usingApiMission && apiActiveMission?.emergency_id) {
-      const lat = effectiveDriverPosition[1];
-      const lng = effectiveDriverPosition[0];
-
-      void (async () => {
-        if (apiActiveMission.status === 'DRIVER_ASSIGNED') {
-          const enRoute = await updateStatus(
-            apiActiveMission.emergency_id,
-            'EN_ROUTE_PATIENT',
-            lat,
-            lng,
-          );
-
-          if (!enRoute.success) {
-            setMissionStatusOverride(null);
-            setRouteError(enRoute.message || 'Unable to start patient route.');
-            return;
-          }
-        }
-
-        const picked = await updateStatus(
-          apiActiveMission.emergency_id,
-          'PATIENT_PICKED',
-          lat,
-          lng,
-        );
-
-        if (!picked.success) {
-          setMissionStatusOverride(null);
-          setRouteError(picked.message || 'Unable to mark patient as picked.');
-        }
-      })();
     }
 
     if (retryTimerRef.current !== null) {
@@ -1394,12 +1344,110 @@ export function LiveMission() {
 
         setIsResolvingNearestHospital(false);
       });
+  }, [effectiveDriverPosition]);
+
+  const handleMarkAsPicked = useCallback(() => {
+    if (!mission || !effectiveDriverPosition || isResolvingNearestHospital) {
+      return;
+    }
+
+    if (!MAPBOX_TOKEN) {
+      setRouteError('Mapbox token missing. Cannot find nearest hospital.');
+      return;
+    }
+
+    setMissionStatus('picked_up');
+    // Stop simulation instead of reset, to prevent snapping back to start
+    stopSimulation();
+    setRouteData(null);
+    setNavStepIndex(0);
+    announced200Ref.current.clear();
+    announced50Ref.current.clear();
+    straightAnnouncedRef.current.clear();
+    lastFetchRef.current = null;
+    setRetryNonce((value) => value + 1);
+    setRouteError(null);
+    setIsResolvingNearestHospital(true);
+    speak('Patient on board. Finding nearest hospital with available beds.', true);
+
+    if (usingApiMission && apiActiveMission?.emergency_id) {
+      const lat = effectiveDriverPosition[1];
+      const lng = effectiveDriverPosition[0];
+
+      void (async () => {
+        // Step through required transitions to reach PATIENT_PICKED
+        if (apiActiveMission.status === 'DRIVER_ASSIGNED') {
+          const enRoute = await updateStatus(
+            apiActiveMission.emergency_id,
+            'EN_ROUTE_PATIENT',
+            lat,
+            lng,
+          );
+
+          if (!enRoute.success) {
+            setMissionStatusOverride(null);
+            setRouteError(enRoute.message || 'Unable to start patient route.');
+            setIsResolvingNearestHospital(false);
+            return;
+          }
+        }
+
+        // Transition to PATIENT_PICKED — backend auto-finds nearest hospital
+        const picked = await updateStatus(
+          apiActiveMission.emergency_id,
+          'PATIENT_PICKED',
+          lat,
+          lng,
+        );
+
+        if (!picked.success) {
+          setMissionStatusOverride(null);
+          setRouteError(picked.message || 'Unable to mark patient as picked.');
+          setIsResolvingNearestHospital(false);
+          return;
+        }
+
+        // Use backend-recommended hospital if available
+        const recHospital = picked.recommended_hospital;
+        if (recHospital && recHospital.lat != null && recHospital.lng != null) {
+          const backendHospital: NearestHospital = {
+            name: recHospital.name,
+            address: recHospital.address || recHospital.name,
+            lng: recHospital.lng,
+            lat: recHospital.lat,
+          };
+          setNearestHospital(backendHospital);
+          lastFetchRef.current = null;
+          setRetryNonce((value) => value + 1);
+          setIsResolvingNearestHospital(false);
+
+          const bedsInfo = recHospital.available_beds != null
+            ? ` with ${recHospital.available_beds} beds available`
+            : '';
+          speak(
+            `Hospital assigned: ${recHospital.name}${bedsInfo}. Calculating route now.`,
+            true,
+          );
+          return;
+        }
+
+        // Fallback: use Mapbox geocoding if backend didn't return hospital coords
+        _fallbackToMapboxHospitalLookup();
+      })();
+
+      return;
+    }
+
+    // Non-API mission: fallback to Mapbox geocoding
+    _fallbackToMapboxHospitalLookup();
+
   }, [
+    _fallbackToMapboxHospitalLookup,
     apiActiveMission?.emergency_id,
     apiActiveMission?.status,
     effectiveDriverPosition,
     isResolvingNearestHospital,
-    mission,
+    resetSimulation,
     setMissionStatus,
     speak,
     stopSimulation,
@@ -1902,7 +1950,12 @@ export function LiveMission() {
             <NavigationControl position="top-right" />
 
             {routeGeoJson ? (
-              <Source id="live-mission-route-source" type="geojson" data={routeGeoJson}>
+              <Source
+                key={routeData?.loadedAt ?? 'initial'}
+                id="live-mission-route-source"
+                type="geojson"
+                data={routeGeoJson}
+              >
                 <Layer {...routeLineLayer} />
               </Source>
             ) : null}
