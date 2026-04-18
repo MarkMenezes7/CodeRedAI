@@ -13,6 +13,15 @@ export interface CarAccidentAlert {
   airbagsActivated: boolean;
   notifiedHospitalIds: string[];
   notifiedDriverIds: string[];
+  assignedHospitalId?: string | null;
+  assignedHospitalName?: string | null;
+  assignedHospitalAddress?: string | null;
+  assignedHospitalLat?: number | null;
+  assignedHospitalLng?: number | null;
+  assignedDriverId?: string | null;
+  mirroredEmergencyId?: string | null;
+  hospitalRejectedIds: string[];
+  driverRejectedIds: string[];
   notes: string;
   createdAt: string;
 }
@@ -53,6 +62,15 @@ interface BackendCarAccidentAlert {
   airbags_activated: boolean;
   notified_hospital_ids: string[];
   notified_driver_ids: string[];
+  assigned_hospital_id?: string | null;
+  assigned_hospital_name?: string | null;
+  assigned_hospital_address?: string | null;
+  assigned_hospital_lat?: number | null;
+  assigned_hospital_lng?: number | null;
+  assigned_driver_id?: string | null;
+  mirrored_emergency_id?: string | null;
+  hospital_rejected_ids?: string[];
+  driver_rejected_ids?: string[];
   notes: string;
   created_at: string;
 }
@@ -82,6 +100,12 @@ interface BackendListCarAccidentsResponse {
   alerts: BackendCarAccidentAlert[];
 }
 
+interface BackendCarAccidentActionResponse {
+  success: boolean;
+  message: string;
+  alert: BackendCarAccidentAlert;
+}
+
 function mapAlert(alert: BackendCarAccidentAlert): CarAccidentAlert {
   return {
     id: alert.id,
@@ -96,6 +120,15 @@ function mapAlert(alert: BackendCarAccidentAlert): CarAccidentAlert {
     airbagsActivated: alert.airbags_activated,
     notifiedHospitalIds: Array.isArray(alert.notified_hospital_ids) ? alert.notified_hospital_ids : [],
     notifiedDriverIds: Array.isArray(alert.notified_driver_ids) ? alert.notified_driver_ids : [],
+    assignedHospitalId: alert.assigned_hospital_id ?? null,
+    assignedHospitalName: alert.assigned_hospital_name ?? null,
+    assignedHospitalAddress: alert.assigned_hospital_address ?? null,
+    assignedHospitalLat: alert.assigned_hospital_lat ?? null,
+    assignedHospitalLng: alert.assigned_hospital_lng ?? null,
+    assignedDriverId: alert.assigned_driver_id ?? null,
+    mirroredEmergencyId: alert.mirrored_emergency_id ?? null,
+    hospitalRejectedIds: Array.isArray(alert.hospital_rejected_ids) ? alert.hospital_rejected_ids : [],
+    driverRejectedIds: Array.isArray(alert.driver_rejected_ids) ? alert.driver_rejected_ids : [],
     notes: alert.notes || '',
     createdAt: alert.created_at,
   };
@@ -148,4 +181,76 @@ export async function createCarAccidentAlert(payload: CreateCarAccidentPayload):
 export async function listCarAccidentAlerts(limit = 30): Promise<CarAccidentAlert[]> {
   const response = await apiRequest<BackendListCarAccidentsResponse>(`/api/car-accidents?limit=${limit}`);
   return response.alerts.map(mapAlert);
+}
+
+export async function acceptDriverCarAccidentAlert(alertId: string, driverId: string): Promise<{
+  message: string;
+  alert: CarAccidentAlert;
+}> {
+  const response = await apiRequest<BackendCarAccidentActionResponse>(
+    `/api/car-accidents/${encodeURIComponent(alertId)}/driver/accept`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ driver_id: driverId }),
+    },
+  );
+
+  return {
+    message: response.message,
+    alert: mapAlert(response.alert),
+  };
+}
+
+export async function rejectDriverCarAccidentAlert(alertId: string, driverId: string): Promise<{
+  message: string;
+  alert: CarAccidentAlert;
+}> {
+  const response = await apiRequest<BackendCarAccidentActionResponse>(
+    `/api/car-accidents/${encodeURIComponent(alertId)}/driver/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ driver_id: driverId }),
+    },
+  );
+
+  return {
+    message: response.message,
+    alert: mapAlert(response.alert),
+  };
+}
+
+export async function acceptHospitalCarAccidentAlert(alertId: string, hospitalId: string): Promise<{
+  message: string;
+  alert: CarAccidentAlert;
+}> {
+  const response = await apiRequest<BackendCarAccidentActionResponse>(
+    `/api/car-accidents/${encodeURIComponent(alertId)}/hospital/accept`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ hospital_id: hospitalId }),
+    },
+  );
+
+  return {
+    message: response.message,
+    alert: mapAlert(response.alert),
+  };
+}
+
+export async function rejectHospitalCarAccidentAlert(alertId: string, hospitalId: string): Promise<{
+  message: string;
+  alert: CarAccidentAlert;
+}> {
+  const response = await apiRequest<BackendCarAccidentActionResponse>(
+    `/api/car-accidents/${encodeURIComponent(alertId)}/hospital/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ hospital_id: hospitalId }),
+    },
+  );
+
+  return {
+    message: response.message,
+    alert: mapAlert(response.alert),
+  };
 }

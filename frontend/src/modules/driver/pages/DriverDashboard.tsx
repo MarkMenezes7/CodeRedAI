@@ -5,6 +5,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { DriverLayout } from './DriverLayout';
 import { resolveDriverUnitId } from '../utils/driverIdentity';
+import type { DriverAuthUser } from '@shared/utils/driverAuthApi';
 import type {
   CarAccidentAlert,
   DispatchOffer,
@@ -15,8 +16,9 @@ import type {
   OpsEvent,
   PatientRequest,
 } from '@shared/types/hospitalOps.types';
-import { createInitialHospitalOpsState } from '@shared/utils/hospitalDemoData';
+import { createInitialHospitalOpsState, MUMBAI_REAL_HOSPITALS } from '@shared/utils/hospitalDemoData';
 import { buildRoadRoute, distanceKm, fetchRoadRouteFromApi, routeDistanceKm } from '@shared/utils/hospitalOpsSimulator';
+import { listCarAccidentAlerts, type CarAccidentAlert as ApiCarAccidentAlert } from '@shared/utils/carAccidentApi';
 import {
   fetchDriverStats,
   fetchActiveMission,
@@ -156,45 +158,89 @@ function loadOpsStateByKey(key: string): HospitalOpsState | null {
   return null;
 }
 
-function resolveLatestOpsStorageKey(preferredHospitalId?: string, preferredDriverId?: string): string | null {
-  if (typeof window === 'undefined') {
+function resolveLatestOpsStorageKey(preferredHospitalId?: string): string | null {
+  if (typeof window === 'undefined' || !preferredHospitalId) {
     return null;
   }
 
-  if (preferredHospitalId) {
-    const preferredKey = stateStorageKey(preferredHospitalId);
-    if (window.localStorage.getItem(preferredKey)) {
-      return preferredKey;
-    }
-  }
-
-  const allKeys = Object.keys(window.localStorage).filter((key) => key.startsWith(STORAGE_KEY_PREFIX));
-  if (allKeys.length === 0) {
+  const preferredKey = stateStorageKey(preferredHospitalId);
+  if (!window.localStorage.getItem(preferredKey)) {
     return null;
   }
 
-  const candidates = allKeys
-    .map((key) => {
-      const state = loadOpsStateByKey(key);
-      return {
-        key,
-        state,
-        tickAt: state ? Date.parse(state.lastSimulationAt) : 0,
-      };
-    })
-    .sort((left, right) => right.tickAt - left.tickAt);
+  return preferredKey;
+}
 
-  if (preferredDriverId) {
-    const keyForDriver = candidates.find((candidate) =>
-      candidate.state?.drivers.some((driver) => driver.id === preferredDriverId),
-    );
+function resolveHospitalRefForDriver(hospitalId?: string): HospitalLocationRef {
+  const normalizedHospitalId = (hospitalId ?? DEFAULT_HOSPITAL_ID).trim().toUpperCase();
+  const knownHospital = MUMBAI_REAL_HOSPITALS.find((hospital) => hospital.id.toUpperCase() === normalizedHospitalId);
 
-    if (keyForDriver) {
-      return keyForDriver.key;
-    }
+  if (knownHospital) {
+    return knownHospital;
   }
 
-  return candidates[0]?.key ?? null;
+  return MUMBAI_REAL_HOSPITALS.find((hospital) => hospital.id === DEFAULT_HOSPITAL_ID) ?? MUMBAI_REAL_HOSPITALS[0];
+}
+
+function fallbackDriverCallSign(driverUser: DriverAuthUser) {
+  const fromName = (driverUser.name || driverUser.email).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+  const suffix = driverUser.id.slice(-3).toUpperCase();
+  return `${fromName || 'DRV'}-${suffix}`;
+}
+
+function ensureDriverUnitInState(state: HospitalOpsState, driverUser: DriverAuthUser | null): HospitalOpsState {
+  if (!driverUser) {
+    return state;
+  }
+
+  if (state.drivers.some((driver) => driver.id === driverUser.id)) {
+    return state;
+  }
+
+  const nowIso = new Date().toISOString();
+  const fallbackVehicleSuffix = driverUser.id.slice(-4).toUpperCase().padStart(4, '0');
+  const driverUnit = {
+    id: driverUser.id,
+    callSign: driverUser.callSign?.trim() || fallbackDriverCallSign(driverUser),
+    name: driverUser.name || driverUser.email,
+    vehicleNumber: driverUser.vehicleNumber || `MH-01-EM-${fallbackVehicleSuffix}`,
+    phone: driverUser.phone || '+91 90000 00000',
+    linkedHospitalId: (driverUser.linkedHospitalId ?? state.hospital.id).toUpperCase(),
+    status: 'available' as const,
+    occupied: false,
+    location: { ...state.hospital.location },
+    speedKmph: 40,
+    fuelPct: 76,
+    lastPingAt: nowIso,
+    pingIntervalSec: 6,
+    secondsSincePing: 0,
+  };
+
+  return {
+    ...state,
+    drivers: [driverUnit, ...state.drivers],
+    lastSimulationAt: nowIso,
+  };
+}
+
+function mapApiAlertToDriverCarAccident(alert: ApiCarAccidentAlert): CarAccidentAlert {
+  return {
+    id: alert.id,
+    carName: alert.carName,
+    carModel: alert.carModel,
+    personName: alert.personName,
+    personPhone: alert.personPhone,
+    location: {
+      lat: alert.lat,
+      lng: alert.lng,
+    },
+    severity: alert.severity,
+    airbagsActivatedAt: alert.createdAt,
+    hospitalId: alert.assignedHospitalId ?? alert.notifiedHospitalIds[0] ?? '',
+    notifiedDriverIds: Array.isArray(alert.notifiedDriverIds) ? alert.notifiedDriverIds : [],
+    status: alert.status === 'resolved' ? 'resolved' : alert.status === 'acknowledged' ? 'acknowledged' : 'new',
+    notes: alert.notes || undefined,
+  };
 }
 
 function formatClock(totalSeconds: number) {
@@ -414,10 +460,15 @@ export function DriverDashboard() {
       return;
     }
 
-    const resolvedKey = resolveLatestOpsStorageKey(
-      driverUser?.linkedHospitalId ?? DEFAULT_HOSPITAL_ID,
-      driverUser?.id,
-    );
+    const preferredHospitalId = (driverUser?.linkedHospitalId ?? DEFAULT_HOSPITAL_ID).trim().toUpperCase();
+    let resolvedKey = resolveLatestOpsStorageKey(preferredHospitalId);
+
+    if (!resolvedKey && typeof window !== 'undefined') {
+      const hospitalRef = resolveHospitalRefForDriver(preferredHospitalId);
+      const seededState = ensureDriverUnitInState(createInitialHospitalOpsState(hospitalRef), driverUser);
+      resolvedKey = stateStorageKey(hospitalRef.id);
+      window.localStorage.setItem(resolvedKey, JSON.stringify(seededState));
+    }
 
     if (!resolvedKey) {
       setOpsStorageKey(null);
@@ -431,15 +482,19 @@ export function DriverDashboard() {
       return;
     }
 
+    const withDriverState = ensureDriverUnitInState(parsed, driverUser);
+    if (withDriverState !== parsed && typeof window !== 'undefined') {
+      window.localStorage.setItem(resolvedKey, JSON.stringify(withDriverState));
+    }
+
+    const resolvedDriverId = resolveDriverUnitId({
+      driverUser,
+      drivers: withDriverState.drivers,
+    });
+
     setOpsStorageKey(resolvedKey);
-    setOpsState(parsed);
-    setSelectedDriverId((previousDriverId) =>
-      resolveDriverUnitId({
-        driverUser,
-        drivers: parsed.drivers,
-        previousDriverId,
-      }),
-    );
+    setOpsState(withDriverState);
+    setSelectedDriverId(resolvedDriverId ?? (driverUser ? driverUser.id : null));
   }, [driverUser, isDriverAuthenticated]);
 
   useEffect(() => {
@@ -506,13 +561,21 @@ export function DriverDashboard() {
     () => resolveDriverUnitId({ driverUser, drivers: linkedDrivers }),
     [driverUser, linkedDrivers],
   );
+
+  useEffect(() => {
+    setSelectedDriverId((previousId) => {
+      const targetId = authenticatedDriverUnitId ?? null;
+      return previousId === targetId ? previousId : targetId;
+    });
+  }, [authenticatedDriverUnitId]);
+
   const selectableDrivers = useMemo(() => {
     if (!authenticatedDriverUnitId) {
-      return linkedDrivers;
+      return [];
     }
 
     const ownDriver = linkedDrivers.find((driver) => driver.id === authenticatedDriverUnitId);
-    return ownDriver ? [ownDriver] : linkedDrivers;
+    return ownDriver ? [ownDriver] : [];
   }, [authenticatedDriverUnitId, linkedDrivers]);
   const pendingOfferCountForDriver = useMemo(() => {
     if (!authenticatedDriverUnitId) {
@@ -617,6 +680,149 @@ export function DriverDashboard() {
       ) ?? null
     );
   }, [opsState, selectedDriver]);
+
+  useEffect(() => {
+    if (!isDriverAuthenticated || !selectedDriver?.id || !opsStorageKey || typeof window === 'undefined') {
+      return;
+    }
+
+    let isDisposed = false;
+
+    const syncCarAlertsIntoDriverState = async () => {
+      try {
+        const alerts = await listCarAccidentAlerts(80);
+        if (isDisposed) {
+          return;
+        }
+
+        const latestState = loadOpsStateByKey(opsStorageKey);
+        if (!latestState) {
+          return;
+        }
+
+        const driverFromState = latestState.drivers.find((driver) => driver.id === selectedDriver.id);
+        if (!driverFromState) {
+          return;
+        }
+
+        const nowIso = new Date().toISOString();
+        const previousCarRequestsById = new globalThis.Map<string, PatientRequest>(
+          latestState.requests
+            .filter((request) => request.id.startsWith('CAR-'))
+            .map((request) => [request.id, request]),
+        );
+
+        const nextCarRequests: PatientRequest[] = alerts
+          .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+          .map((alert) => {
+            const requestId = `CAR-${alert.id}`;
+            const previousRequest = previousCarRequestsById.get(requestId);
+            const assignedHospitalLocation =
+              typeof alert.assignedHospitalLat === 'number' && typeof alert.assignedHospitalLng === 'number'
+                ? { lat: alert.assignedHospitalLat, lng: alert.assignedHospitalLng }
+                : previousRequest?.destinationHospitalLocation;
+
+            const status: PatientRequest['status'] =
+              alert.status === 'resolved'
+                ? 'completed'
+                : alert.assignedDriverId
+                  ? 'dispatched'
+                  : alert.assignedHospitalId
+                    ? 'triaged'
+                    : 'new';
+
+            return {
+              id: requestId,
+              sourceAlertId: alert.id,
+              patientName: alert.personName,
+              age: previousRequest?.age ?? 35,
+              severity: alert.severity,
+              symptom: previousRequest?.symptom ?? `Car accident alert from ${alert.carName} ${alert.carModel}`,
+              address: previousRequest?.address ?? `Crash location (${alert.lat.toFixed(5)}, ${alert.lng.toFixed(5)})`,
+              location: {
+                lat: alert.lat,
+                lng: alert.lng,
+              },
+              channel: 'whatsapp',
+              reportedAt: alert.createdAt,
+              status,
+              assignedDriverId: alert.assignedDriverId ?? undefined,
+              hospitalId: alert.assignedHospitalId ?? undefined,
+              destinationHospitalName: alert.assignedHospitalName ?? previousRequest?.destinationHospitalName,
+              destinationHospitalAddress:
+                alert.assignedHospitalAddress ?? previousRequest?.destinationHospitalAddress,
+              destinationHospitalLocation: assignedHospitalLocation,
+              driverCandidateIds: Array.isArray(alert.notifiedDriverIds) ? alert.notifiedDriverIds : [],
+              hospitalCandidateIds: Array.isArray(alert.notifiedHospitalIds) ? alert.notifiedHospitalIds : [],
+              driverRejectedIds: Array.isArray(alert.driverRejectedIds) ? alert.driverRejectedIds : [],
+              hospitalRejectedIds: Array.isArray(alert.hospitalRejectedIds) ? alert.hospitalRejectedIds : [],
+              notes:
+                [previousRequest?.notes, alert.notes, `[car-alert:${alert.id}] Contact ${alert.personPhone}`]
+                  .filter(Boolean)
+                  .join(' | ') || undefined,
+            };
+          });
+
+        const nextDriverOffers: DispatchOffer[] = [];
+        if (isDispatchOfferDriverAvailable(driverFromState.status, driverFromState.occupied)) {
+          nextCarRequests.forEach((request) => {
+            if (!request.sourceAlertId || request.assignedDriverId || request.status === 'completed') {
+              return;
+            }
+
+            if (request.driverRejectedIds?.includes(driverFromState.id)) {
+              return;
+            }
+
+            if (request.driverCandidateIds?.length && !request.driverCandidateIds.includes(driverFromState.id)) {
+              return;
+            }
+
+            const offeredAtMs = Date.parse(request.reportedAt);
+            const baseTs = Number.isFinite(offeredAtMs) ? offeredAtMs : Date.now();
+
+            nextDriverOffers.push({
+              id: `ALERT-${request.id}-${driverFromState.id}`,
+              requestId: request.id,
+              offeredDriverId: driverFromState.id,
+              offeredAt: new Date(baseTs).toISOString(),
+              expiresAt: new Date(baseTs + DISPATCH_OFFER_SECONDS * 1000).toISOString(),
+            });
+          });
+        }
+
+        const nextCarAccidents = alerts.map(mapApiAlertToDriverCarAccident);
+        const nonCarRequests = latestState.requests.filter((request) => !request.id.startsWith('CAR-'));
+        const nonCarOffers = (latestState.pendingDispatchOffers ?? []).filter(
+          (offer) => !offer.requestId.startsWith('CAR-') && offerSecondsLeft(offer, Date.now()) > 0,
+        );
+
+        const nextState: HospitalOpsState = {
+          ...latestState,
+          requests: [...nextCarRequests, ...nonCarRequests],
+          pendingDispatchOffers: [...nextDriverOffers, ...nonCarOffers],
+          carAccidents: nextCarAccidents,
+          lastSimulationAt: nowIso,
+        };
+
+        window.localStorage.setItem(opsStorageKey, JSON.stringify(nextState));
+        setOpsState(nextState);
+      } catch {
+        // Keep current state; next polling cycle will retry.
+      }
+    };
+
+    void syncCarAlertsIntoDriverState();
+
+    const intervalId = window.setInterval(() => {
+      void syncCarAlertsIntoDriverState();
+    }, 3_000);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isDriverAuthenticated, opsStorageKey, selectedDriver?.id]);
 
   const missionLabel = missionLabelFromDriver(selectedDriver?.status, activeRequest);
   const statusTone = missionTone(missionLabel);
@@ -1029,11 +1235,10 @@ export function DriverDashboard() {
 
     const resetState = createInitialHospitalOpsState(hospitalRef);
     updateLinkedState(resetState);
-    setSelectedDriverId((previousDriverId) =>
+    setSelectedDriverId(
       resolveDriverUnitId({
         driverUser,
         drivers: resetState.drivers,
-        previousDriverId,
       }),
     );
     setAlertStrip(null);
@@ -1512,7 +1717,7 @@ export function DriverDashboard() {
             <select
               className="driver-select"
               value={selectedDriverId ?? ''}
-              disabled={Boolean(authenticatedDriverUnitId)}
+              disabled={isDriverAuthenticated}
               onChange={(event) => setSelectedDriverId(event.target.value || null)}
             >
               {selectableDrivers.length === 0 ? <option value="">No drivers</option> : null}

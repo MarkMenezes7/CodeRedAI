@@ -106,7 +106,7 @@
   gap: 6px;
 }
 
-.map-popup-actions button {
+.map-popup-btn {
   border: 1px solid #d7dfe9;
   border-radius: 8px;
   background: #f4f7fb;
@@ -120,10 +120,61 @@
   cursor: pointer;
 }
 
-.map-popup-actions button:last-child {
+.map-popup-btn.map-popup-btn-neutral {
+  border-color: #d7dfe9;
+  background: #f4f7fb;
+  color: #1f2a38;
+}
+
+.map-popup-btn.map-popup-btn-accept {
+  border-color: #b9e4ca;
+  background: #eaf8ef;
+  color: #206841;
+}
+
+.map-popup-btn.map-popup-btn-reject {
   border-color: #f2c2c2;
   background: #fff1f1;
   color: #c43737;
+}
+
+.map-focus-controls {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 430;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(94%, 760px);
+}
+
+.map-focus-btn {
+  border: 1px solid #cdd7e4;
+  border-radius: 999px;
+  min-height: 30px;
+  padding: 0 11px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #304258;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+
+.map-focus-btn.active {
+  border-color: rgba(215, 43, 43, 0.6);
+  background: rgba(255, 237, 237, 0.96);
+  color: #9a2424;
+}
+
+.map-focus-btn.map-focus-btn-clear {
+  border-color: #f0c7c7;
+  background: rgba(255, 241, 241, 0.96);
+  color: #b23838;
 }
 
 .map-note {
@@ -163,5 +214,17 @@
     max-width: 90%;
     font-size: 0.69rem;
     bottom: 8px;
+  }
+
+  .map-focus-controls {
+    top: 8px;
+    left: 8px;
+    gap: 5px;
+  }
+
+  .map-focus-btn {
+    min-height: 28px;
+    padding: 0 9px;
+    font-size: 0.62rem;
   }
 }

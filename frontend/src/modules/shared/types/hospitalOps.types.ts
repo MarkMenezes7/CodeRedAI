@@ -76,8 +76,17 @@ export interface PatientRequest {
   channel: RequestChannel;
   reportedAt: string;
   status: RequestStatus;
+  sourceAlertId?: string;
   assignedDriverId?: string;
   hospitalId?: string;
+  destinationHospitalName?: string;
+  destinationHospitalAddress?: string;
+  destinationHospitalLocation?: GeoPoint;
+  driverCandidateIds?: string[];
+  hospitalCandidateIds?: string[];
+  hospitalRejectedIds?: string[];
+  driverRejectedIds?: string[];
+  hospitalAcceptedAt?: string;
   notes?: string;
   closedAt?: string;
 }

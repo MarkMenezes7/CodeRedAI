@@ -42,6 +42,15 @@ class CarAccidentAlertItem(BaseModel):
     airbags_activated: bool
     notified_hospital_ids: List[str]
     notified_driver_ids: List[str]
+    assigned_hospital_id: Optional[str] = None
+    assigned_hospital_name: Optional[str] = None
+    assigned_hospital_address: Optional[str] = None
+    assigned_hospital_lat: Optional[float] = None
+    assigned_hospital_lng: Optional[float] = None
+    assigned_driver_id: Optional[str] = None
+    mirrored_emergency_id: Optional[str] = None
+    hospital_rejected_ids: List[str] = []
+    driver_rejected_ids: List[str] = []
     notes: str
     created_at: datetime
 
@@ -58,3 +67,17 @@ class ListCarAccidentsResponse(BaseModel):
     success: bool
     count: int
     alerts: List[CarAccidentAlertItem]
+
+
+class DriverOfferActionRequest(BaseModel):
+    driver_id: str = Field(..., min_length=1, max_length=120)
+
+
+class HospitalOfferActionRequest(BaseModel):
+    hospital_id: str = Field(..., min_length=1, max_length=120)
+
+
+class CarAccidentActionResponse(BaseModel):
+    success: bool
+    message: str
+    alert: CarAccidentAlertItem

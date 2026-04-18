@@ -726,6 +726,7 @@
   top: 78px;
   max-height: calc(100vh - 94px);
   overflow: hidden;
+  grid-template-rows: auto auto minmax(0, 1fr);
   background: rgba(255, 255, 255, 0.66);
   backdrop-filter: blur(14px) saturate(1.22);
   -webkit-backdrop-filter: blur(14px) saturate(1.22);
@@ -741,10 +742,17 @@
 .request-filters {
   position: relative;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 6px;
   padding: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+
+.request-filters::-webkit-scrollbar { display: none; }
 
 .request-filters-indicator {
   position: absolute;
@@ -765,6 +773,7 @@
 .filter-chip {
   position: relative;
   z-index: 1;
+  flex: 0 0 auto;
   min-height: 28px;
   padding: 0 12px;
   border-radius: 999px;
@@ -776,6 +785,7 @@
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  white-space: nowrap;
   transition: all 140ms;
 }
 .filter-chip:hover { color: var(--c-text); border-color: var(--c-border-hi); }
@@ -786,7 +796,17 @@
 }
 
 /* ─── Request list ────────────────────────────────────────────────── */
-.request-list { display: grid; gap: 8px; max-height: 820px; overflow-y: auto; padding-right: 2px; }
+.request-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  max-height: 820px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 2px;
+}
 .request-list::-webkit-scrollbar { width: 3px; }
 .request-list::-webkit-scrollbar-thumb { background: var(--c-faint); border-radius: 3px; }
 
@@ -1027,11 +1047,15 @@
 
   .hospital-performance-banner { padding: 18px; gap: 18px; }
   .hospital-performance-left { width: 100%; align-items: flex-start; }
-  .request-list,
   .driver-list,
   .timeline-list,
   .dashboard-priority-list,
   .car-accident-list { max-height: none; }
+
+  .request-list {
+    max-height: min(62vh, 560px);
+    overflow-y: auto;
+  }
 
   .request-panel {
     position: static;
