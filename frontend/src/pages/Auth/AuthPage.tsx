@@ -72,6 +72,11 @@ const DEFAULT_HOSPITAL_SIGNUP_LOCATION = {
   lat: 19.1177786,
   lng: 72.8780686,
 };
+const LOGIN_TRANSITION_PATH_BY_ROLE: Partial<Record<AppRole, string>> = {
+  hospital: '/hospital/login-transition',
+  driver: '/driver/login-transition',
+  admin: '/admin/login-transition',
+};
 
 function getCurrentHashPath(): string {
   if (typeof window === 'undefined') {
@@ -453,6 +458,15 @@ export function AuthPage() {
       }
 
       setExclusiveSessionForRole(selectedRole);
+
+      if (mode === 'login') {
+        const transitionPath = LOGIN_TRANSITION_PATH_BY_ROLE[selectedRole];
+        if (transitionPath) {
+          redirectToPath(transitionPath);
+          return;
+        }
+      }
+
       redirectToPath(dashboardPathByRole(selectedRole));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Authentication failed.');

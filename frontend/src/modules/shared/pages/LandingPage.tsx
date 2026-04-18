@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 
 import './LandingPage.css';
 
@@ -175,11 +175,41 @@ function WhatsAppIcon() {
 
 export default function LandingPage() {
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+  const heartTapCountRef = useRef(0);
+  const heartTapResetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (heartTapResetTimerRef.current !== null) {
+        window.clearTimeout(heartTapResetTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleScrollToHowItWorks = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     const target = document.getElementById('how-it-works');
     target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handleHiddenHeartTrigger = () => {
+    heartTapCountRef.current += 1;
+
+    if (heartTapResetTimerRef.current !== null) {
+      window.clearTimeout(heartTapResetTimerRef.current);
+      heartTapResetTimerRef.current = null;
+    }
+
+    if (heartTapCountRef.current >= 5) {
+      heartTapCountRef.current = 0;
+      window.location.hash = '/car';
+      return;
+    }
+
+    heartTapResetTimerRef.current = window.setTimeout(() => {
+      heartTapCountRef.current = 0;
+      heartTapResetTimerRef.current = null;
+    }, 2000);
   };
 
   return (
@@ -255,6 +285,15 @@ export default function LandingPage() {
               <path className="heartbeat-grid" d="M18 36 H412 M18 64 H412 M18 92 H412" />
               <path className="heartbeat-line" d={heartbeatPath} />
               <path className="heartbeat-heart" d={heartPath} />
+              <path
+                className="heartbeat-heart-trigger"
+                d={heartPath}
+                fill="transparent"
+                stroke="transparent"
+                strokeWidth={20}
+                pointerEvents="stroke"
+                onClick={handleHiddenHeartTrigger}
+              />
             </svg>
           </div>
         </aside>

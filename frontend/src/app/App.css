@@ -1,17 +1,20 @@
 .app-shell {
+  --app-shell-top-offset: 66px;
   min-height: 100vh;
-  padding-top: 66px;
+  padding-top: var(--app-shell-top-offset);
   background: linear-gradient(180deg, #f9fcff 0%, #eef5fb 100%);
 }
 
 @media (max-width: 920px) {
   .app-shell {
-    padding-top: 148px;
+    --app-shell-top-offset: 148px;
+    padding-top: var(--app-shell-top-offset);
   }
 }
 
 @media (max-width: 640px) {
   .app-shell {
-    padding-top: 222px;
+    --app-shell-top-offset: 222px;
+    padding-top: var(--app-shell-top-offset);
   }
 }

@@ -351,6 +351,10 @@
   animation: heartbeat-pulse 1.2s ease-in-out infinite;
 }
 
+.heartbeat-heart-trigger {
+  cursor: default;
+}
+
 .trust-band {
   margin-top: 18px;
   border-radius: 22px;
