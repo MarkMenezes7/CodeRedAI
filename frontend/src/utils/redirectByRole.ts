@@ -26,7 +26,7 @@ const ADMIN_AUTH_UNLOCK_STORAGE_KEY = 'codered-admin-auth-unlock-v1';
 
 const DASHBOARD_PATH_BY_ROLE: Record<AppRole, string> = {
   hospital: '/hospital-dashboard',
-  driver: '/driver/dashboard',
+  driver: '/driver-dashboard',
   admin: '/admin-dashboard',
 };
 

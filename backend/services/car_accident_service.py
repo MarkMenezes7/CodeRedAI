@@ -26,6 +26,7 @@ VALID_SEVERITIES = {"critical", "high", "moderate", "low"}
 MAX_HOSPITAL_NOTIFICATIONS = 5
 MAX_DRIVER_NOTIFICATIONS = 5
 MAX_NOTIFICATION_RADIUS_M = 20_000
+_SIM_DRIVER_EMAIL_REGEX = r"^sim\.mumbai\.driver\d+@codered\.ai$"
 
 
 def _normalize_text(value: str) -> str:
@@ -89,6 +90,17 @@ def _authenticated_driver_clauses() -> list[dict[str, Any]]:
             ]
         },
     ]
+
+
+def _exclude_sim_driver_clause() -> dict[str, Any]:
+    return {
+        "email": {
+            "$not": {
+                "$regex": _SIM_DRIVER_EMAIL_REGEX,
+                "$options": "i",
+            }
+        }
+    }
 
 
 def _sorted_docs_by_distance(docs: list[dict[str, Any]], lat: float, lng: float) -> list[dict[str, Any]]:
@@ -249,6 +261,7 @@ def _load_notified_drivers(lat: float, lng: float) -> list[dict[str, str | None]
         },
         "dispatch_status": {"$in": ["online", "available"]},
         "$or": _authenticated_driver_clauses(),
+        **_exclude_sim_driver_clause(),
     }
 
     selected_docs_by_id: dict[str, dict[str, Any]] = {}
@@ -271,6 +284,7 @@ def _load_notified_drivers(lat: float, lng: float) -> list[dict[str, str | None]
         fallback_query = {
             "dispatch_status": {"$in": ["online", "available"]},
             "$or": _authenticated_driver_clauses(),
+            **_exclude_sim_driver_clause(),
         }
 
         try:

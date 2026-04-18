@@ -187,7 +187,7 @@ export async function rejectDriverOffer(payload: DriverOfferActionPayload): Prom
 }
 
 export async function fetchActiveMission(driverId: string): Promise<ActiveMissionResponse> {
-  return apiRequest<ActiveMissionResponse>(`/api/driver/active-mission?driver_id=${encodeURIComponent(driverId)}`, {
+  return apiRequest<ActiveMissionResponse>(`/api/driver/active-missions?driver_id=${encodeURIComponent(driverId)}`, {
     method: 'GET',
   });
 }
