@@ -32,7 +32,7 @@ _DEFAULT_RADIUS_M = 5_000       # 5 km initial search radius
 _FALLBACK_RADIUS_M = 10_000     # 10 km fallback
 _EXTENDED_RADIUS_M = 20_000     # 20 km extended fallback
 _MAX_DRIVERS_TO_NOTIFY = 5      # cap notifications per emergency
-_OFFER_TTL_SECONDS = 180        # configurable offer timeout
+_OFFER_TTL_SECONDS = 60         # configurable offer timeout
 
 
 # ---------------------------------------------------------------------------
@@ -754,3 +754,314 @@ def update_mission_status(
         driver_id, emergency_id, new_status,
     )
     return {"success": True, "message": f"Status updated to {new_status}."}
+
+
+# ---------------------------------------------------------------------------
+# Driver Profile & Settings
+# ---------------------------------------------------------------------------
+
+def get_driver_profile(driver_id: str) -> dict[str, Any] | None:
+    """Fetch driver profile info."""
+    try:
+        doc = get_drivers_collection().find_one({"email": driver_id})
+    except PyMongoError as exc:
+        _logger.error("[DRIVER PROFILE ERROR] %s", exc)
+        return None
+    if not doc:
+        return None
+    return {
+        "driver_id": doc.get("email", ""),
+        "name": doc.get("name", ""),
+        "email": doc.get("email", ""),
+        "phone": doc.get("phone", ""),
+        "dispatch_status": doc.get("dispatch_status", "offline"),
+        "call_sign": doc.get("call_sign", ""),
+        "vehicle_id": doc.get("vehicle_id", ""),
+        "joined_at": str(doc.get("created_at", "")) if doc.get("created_at") else None,
+        "settings": doc.get("settings", {}),
+    }
+
+
+def update_driver_profile(
+    driver_id: str,
+    name: str | None = None,
+    phone: str | None = None,
+) -> dict[str, Any]:
+    """Update editable driver profile fields."""
+    update_fields: dict[str, Any] = {"updated_at": datetime.now(tz=timezone.utc)}
+    if name is not None:
+        update_fields["name"] = name
+    if phone is not None:
+        update_fields["phone"] = phone
+    try:
+        result = get_drivers_collection().update_one(
+            {"email": driver_id},
+            {"$set": update_fields},
+        )
+        if result.matched_count == 0:
+            return {"success": False, "message": "Driver not found."}
+        return {"success": True, "message": "Profile updated."}
+    except PyMongoError as exc:
+        _logger.error("[DRIVER PROFILE UPDATE ERROR] %s", exc)
+        return {"success": False, "message": f"Database error: {exc}"}
+
+
+def update_driver_settings(
+    driver_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update driver preference settings (notification prefs, critical only, etc)."""
+    try:
+        # Merge into existing settings
+        update_fields: dict[str, Any] = {
+            "updated_at": datetime.now(tz=timezone.utc),
+        }
+        # Handle dispatch_status separately if included
+        if "dispatch_status" in settings:
+            update_fields["dispatch_status"] = settings.pop("dispatch_status")
+        if settings:
+            for k, v in settings.items():
+                update_fields[f"settings.{k}"] = v
+
+        result = get_drivers_collection().update_one(
+            {"email": driver_id},
+            {"$set": update_fields},
+        )
+        if result.matched_count == 0:
+            return {"success": False, "message": "Driver not found."}
+        return {"success": True, "message": "Settings updated."}
+    except PyMongoError as exc:
+        _logger.error("[DRIVER SETTINGS ERROR] %s", exc)
+        return {"success": False, "message": f"Database error: {exc}"}
+
+
+# ---------------------------------------------------------------------------
+# Mission History & Stats
+# ---------------------------------------------------------------------------
+
+def get_driver_mission_history(
+    driver_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    Fetch all past emergencies assigned to this driver.
+    Returns missions sorted newest first.
+    """
+    try:
+        docs = list(
+            get_emergencies_collection()
+            .find({"assigned_driver_id": driver_id})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
+    except PyMongoError as exc:
+        _logger.error("[MISSION HISTORY ERROR] %s", exc)
+        return []
+
+    missions = []
+    for doc in docs:
+        loc = doc.get("location", {})
+        created = doc.get("created_at")
+        completed = doc.get("completed_at")
+        assigned_at = doc.get("driver_assigned_at")
+
+        # Calculate duration in minutes
+        duration_min = 0
+        if created and completed:
+            try:
+                delta = completed - created
+                duration_min = max(1, int(delta.total_seconds() / 60))
+            except Exception:
+                duration_min = 0
+
+        # Estimate response time (from creation to driver assignment)
+        response_time_min = 0
+        if created and assigned_at:
+            try:
+                delta = assigned_at - created
+                response_time_min = max(0, round(delta.total_seconds() / 60, 1))
+            except Exception:
+                pass
+
+        # Estimate distance from location data (simplified)
+        distance_km = 0.0
+        patient_lat = loc.get("lat")
+        patient_lng = loc.get("lng")
+        if patient_lat and patient_lng:
+            # Try to get hospital location for distance calc
+            hospital_id = doc.get("assigned_hospital")
+            if hospital_id:
+                try:
+                    from database import get_hospitals_collection
+                    hospital = get_hospitals_collection().find_one({"hospital_id": hospital_id})
+                    if hospital:
+                        h_loc = hospital.get("location", {})
+                        if isinstance(h_loc, dict) and h_loc.get("type") == "Point":
+                            coords = h_loc.get("coordinates", [])
+                            if len(coords) >= 2:
+                                import math
+                                dx = (coords[0] - patient_lng) * math.cos(math.radians(patient_lat)) * 111.32
+                                dy = (coords[1] - patient_lat) * 111.32
+                                distance_km = round(math.sqrt(dx*dx + dy*dy), 1)
+                except Exception:
+                    pass
+            if distance_km == 0:
+                # Default estimate based on duration
+                distance_km = round(duration_min * 0.5, 1)  # ~30 km/h avg
+
+        # Earnings calculation
+        base_pay = max(280, round(distance_km * 34 + duration_min * 3.5))
+        severity = doc.get("severity", "low")
+        is_critical = severity in ("critical", "high")
+        golden_hour_met = duration_min <= 60 if doc.get("status") == "COMPLETED" else False
+        bonus = (100 if golden_hour_met else 0) + (50 if is_critical else 0)
+        total_earnings = base_pay + bonus
+
+        # Map status to user-friendly values
+        status_raw = doc.get("status", "REQUESTED")
+        if status_raw == "COMPLETED":
+            display_status = "Completed"
+            payout_status = "Paid"
+        elif status_raw == "CANCELLED":
+            display_status = "Cancelled"
+            payout_status = "N/A"
+        elif status_raw in ("DRIVER_ASSIGNED", "EN_ROUTE_PATIENT", "PATIENT_PICKED", "EN_ROUTE_HOSPITAL"):
+            display_status = "Ongoing"
+            payout_status = "Pending"
+        else:
+            display_status = "Requested"
+            payout_status = "Pending"
+
+        # Map severity to priority label
+        priority_map = {"critical": "Critical", "high": "High", "medium": "Medium", "low": "Low"}
+        priority = priority_map.get(severity, "Low")
+
+        missions.append({
+            "missionId": str(doc["_id"]),
+            "createdAt": str(created) if created else "",
+            "completedAt": str(completed) if completed else None,
+            "patientPhone": doc.get("phone_number", ""),
+            "patientAddress": loc.get("address", ""),
+            "patientLat": patient_lat,
+            "patientLng": patient_lng,
+            "emergencyType": doc.get("emergency_type", ""),
+            "severity": severity,
+            "priority": priority,
+            "status": display_status,
+            "rawStatus": status_raw,
+            "distanceKm": distance_km,
+            "durationMin": duration_min,
+            "responseTimeMin": response_time_min,
+            "basePay": base_pay,
+            "bonus": bonus,
+            "earningsInr": total_earnings,
+            "goldenHourMet": golden_hour_met,
+            "payoutStatus": payout_status,
+            "assignedHospital": doc.get("assigned_hospital"),
+            "assignedHospitalName": None,  # Can be enriched if needed
+        })
+
+    _logger.info("[MISSION HISTORY] driver=%s → %d mission(s)", driver_id, len(missions))
+    return missions
+
+
+def get_driver_stats(driver_id: str) -> dict[str, Any]:
+    """
+    Compute aggregate stats for a driver from their mission history.
+    """
+    missions = get_driver_mission_history(driver_id, limit=500)
+    completed = [m for m in missions if m["status"] == "Completed"]
+    ongoing = [m for m in missions if m["status"] == "Ongoing"]
+    cancelled = [m for m in missions if m["status"] == "Cancelled"]
+
+    total_earnings = sum(m["earningsInr"] for m in completed)
+    total_distance = sum(m["distanceKm"] for m in completed)
+    avg_response = (
+        round(sum(m["responseTimeMin"] for m in completed) / len(completed), 1)
+        if completed else 0
+    )
+    golden_count = sum(1 for m in completed if m["goldenHourMet"])
+    golden_rate = round((golden_count / len(completed)) * 100, 1) if completed else 0
+    success_rate = (
+        round((len(completed) / len(missions)) * 100, 1)
+        if missions else 0
+    )
+
+    return {
+        "totalMissions": len(missions),
+        "completedMissions": len(completed),
+        "ongoingMissions": len(ongoing),
+        "cancelledMissions": len(cancelled),
+        "totalEarnings": total_earnings,
+        "totalDistance": round(total_distance, 1),
+        "avgResponseTimeMin": avg_response,
+        "goldenHourRate": golden_rate,
+        "successRate": success_rate,
+    }
+
+
+def get_driver_earnings(driver_id: str) -> dict[str, Any]:
+    """
+    Compute detailed earnings data for charts and tables.
+    """
+    missions = get_driver_mission_history(driver_id, limit=500)
+    completed = [m for m in missions if m["status"] == "Completed"]
+
+    now = datetime.now(tz=timezone.utc)
+    week_ago = now - timedelta(days=7)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    total_earnings = sum(m["earningsInr"] for m in completed)
+    total_bonuses = sum(m["bonus"] for m in completed)
+    pending_payout = sum(m["earningsInr"] for m in completed if m["payoutStatus"] == "Pending")
+
+    # This-week earnings
+    week_earnings = 0
+    for m in completed:
+        try:
+            created = datetime.fromisoformat(m["createdAt"].replace("Z", "+00:00")) if m["createdAt"] else None
+            if created and created >= week_ago:
+                week_earnings += m["earningsInr"]
+        except Exception:
+            pass
+
+    # This-month earnings
+    month_earnings = 0
+    for m in completed:
+        try:
+            created = datetime.fromisoformat(m["createdAt"].replace("Z", "+00:00")) if m["createdAt"] else None
+            if created and created >= month_start:
+                month_earnings += m["earningsInr"]
+        except Exception:
+            pass
+
+    avg_per_mission = round(total_earnings / len(completed)) if completed else 0
+
+    # Weekly chart data (last 8 weeks)
+    weekly_data = []
+    for i in range(7, -1, -1):
+        week_start = now - timedelta(weeks=i+1)
+        week_end = now - timedelta(weeks=i)
+        week_total = 0
+        for m in completed:
+            try:
+                created = datetime.fromisoformat(m["createdAt"].replace("Z", "+00:00")) if m["createdAt"] else None
+                if created and week_start <= created < week_end:
+                    week_total += m["earningsInr"]
+            except Exception:
+                pass
+        weekly_data.append({
+            "week": f"W{8-i}",
+            "amount": week_total,
+        })
+
+    return {
+        "totalEarnings": total_earnings,
+        "thisWeekEarnings": week_earnings,
+        "thisMonthEarnings": month_earnings,
+        "pendingPayout": pending_payout,
+        "totalBonuses": total_bonuses,
+        "avgPerMission": avg_per_mission,
+        "weeklyChart": weekly_data,
+        "completedMissions": len(completed),
+    }

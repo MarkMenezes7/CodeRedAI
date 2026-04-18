@@ -16,6 +16,12 @@ import type {
 } from '@shared/types/hospitalOps.types';
 import { createInitialHospitalOpsState } from '@shared/utils/hospitalDemoData';
 import { buildRoadRoute, distanceKm, fetchRoadRouteFromApi, routeDistanceKm } from '@shared/utils/hospitalOpsSimulator';
+import {
+  fetchDriverStats,
+  fetchActiveMission,
+  type DriverStats,
+  type ActiveMission,
+} from '@shared/utils/driverOpsApi';
 import './DriverDashboard.css';
 
 type StatusTone = 'danger' | 'warning' | 'success' | 'neutral';
@@ -43,7 +49,7 @@ type RouteStop = {
 const STORAGE_KEY_PREFIX = 'codered-hospital-demo-v3';
 const DEFAULT_HOSPITAL_ID = 'HSP-MUM-009';
 const DEFAULT_POINT: GeoPoint = { lat: 19.1178, lng: 72.8781 };
-const DISPATCH_OFFER_SECONDS = 10;
+const DISPATCH_OFFER_SECONDS = 60;
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN || '';
 
@@ -364,6 +370,27 @@ export function DriverDashboard() {
   const [isRouteClear, setIsRouteClear] = useState(true);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [isAcceptingDispatchOffer, setIsAcceptingDispatchOffer] = useState(false);
+
+  // Real-time API stats
+  const [apiStats, setApiStats] = useState<DriverStats | null>(null);
+  const [apiActiveMission, setApiActiveMission] = useState<ActiveMission | null>(null);
+
+  useEffect(() => {
+    if (!driverUser?.email) return;
+    const loadApiData = async () => {
+      try {
+        const [statsRes, missionRes] = await Promise.all([
+          fetchDriverStats(driverUser.email),
+          fetchActiveMission(driverUser.email),
+        ]);
+        if (statsRes.success) setApiStats(statsRes);
+        if (missionRes.success) setApiActiveMission(missionRes.mission);
+      } catch {}
+    };
+    void loadApiData();
+    const id = window.setInterval(loadApiData, 10_000);
+    return () => window.clearInterval(id);
+  }, [driverUser?.email]);
 
   const syncLinkedState = useCallback(() => {
     if (!isDriverAuthenticated) {
@@ -1456,11 +1483,24 @@ export function DriverDashboard() {
         </section>
       ) : null}
 
-      <section className="driver-kpi-grid" aria-label="Mission snapshot">
+      <section className="driver-kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }} aria-label="Mission snapshot">
+        {/* Real-time stats from Backend */}
+        <article className="kpi-card">
+          <p>Missions Today</p>
+          <strong>{apiStats?.completedMissions ?? '--'}</strong>
+          <span>{apiStats ? `${apiStats.successRate}% Success` : 'Syncing...'}</span>
+        </article>
+        <article className="kpi-card">
+          <p>Earnings</p>
+          <strong className="mono">₹{apiStats?.totalEarnings?.toLocaleString('en-IN') ?? '--'}</strong>
+          <span>Total accumulated</span>
+        </article>
+        
+        {/* Local Ops State */}
         <article className="kpi-card">
           <p>Status</p>
-          <strong>{missionLabel}</strong>
-          <span>{activeRequest ? `Request ${activeRequest.id}` : 'Waiting for assignment'}</span>
+          <strong>{apiActiveMission ? 'Ongoing Mission' : missionLabel}</strong>
+          <span>{apiActiveMission ? `Request ${apiActiveMission.emergency_id}` : (activeRequest ? `Request ${activeRequest.id}` : 'Waiting for assignment')}</span>
         </article>
         <article className="kpi-card">
           <p>Mission Timer</p>

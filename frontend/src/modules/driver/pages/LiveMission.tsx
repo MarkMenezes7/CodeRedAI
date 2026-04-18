@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Crosshair, Maximize2, Pause, PhoneCall, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import Map, {
   Layer,
@@ -448,6 +448,31 @@ export function LiveMission() {
   const [isResolvingNearestHospital, setIsResolvingNearestHospital] = useState(false);
   const [isCompletingMission, setIsCompletingMission] = useState(false);
   const [preferApiDispatchMode, setPreferApiDispatchMode] = useState(false);
+  const [completionSummary, setCompletionSummary] = useState<{ id: string } | null>(null);
+
+  // Real GPS tracking
+  const [realGpsPosition, setRealGpsPosition] = useState<[number, number] | null>(null);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setRealGpsPosition([pos.coords.longitude, pos.coords.latitude]);
+      },
+      (err) => console.error('GPS error:', err),
+      { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, []);
+
+  // Update backend every 5 seconds if we have a real GPS and active API mission
+  useEffect(() => {
+    if (!realGpsPosition || !apiActiveMission?.emergency_id || !driverDispatchId) return;
+    const intervalId = window.setInterval(() => {
+      void updateStatus(apiActiveMission.emergency_id, apiActiveMission.status, realGpsPosition[1], realGpsPosition[0]);
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [realGpsPosition, apiActiveMission, updateStatus, driverDispatchId]);
 
   const mapRef = useRef<MapRef | null>(null);
   const retryTimerRef = useRef<number | null>(null);
@@ -1422,7 +1447,12 @@ export function LiveMission() {
         setNavStepIndex(0);
         lastFetchRef.current = null;
         speak('Mission marked as completed. You are now available for new assignments.', true);
-        setIsCompletingMission(false);
+        
+        setCompletionSummary({ id: apiActiveMission.emergency_id });
+        setTimeout(() => {
+          setCompletionSummary(null);
+          setIsCompletingMission(false);
+        }, 5000);
       })();
 
       return;
@@ -1734,6 +1764,30 @@ export function LiveMission() {
         <main style={{ padding: '20px' }}>
           {emptyState('Mapbox token missing. Set VITE_MAPBOX_ACCESS_TOKEN to enable live mission navigation.')}
         </main>
+      </DriverLayout>
+    );
+  }
+
+  if (completionSummary) {
+    return (
+      <DriverLayout missionActive={false} pickupCount={0} onLogout={logoutDriverUser}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', background: '#f8fafc' }}>
+          <div style={{ background: 'white', padding: '3rem', borderRadius: '16px', boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1)', textAlign: 'center' }}>
+            <div style={{ background: '#16a34a', color: '#15803d', width: '80px', height: '80px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem auto' }}>
+              <span style={{color: 'white', fontSize: 40}}>✓</span>
+            </div>
+            <h2 style={{ margin: '0 0 0.5rem 0', color: '#0f172a', fontSize: '1.5rem' }}>Mission Completed</h2>
+            <p style={{ margin: '0 0 1.5rem 0', color: '#475569' }}>Patient safely delivered for #{completionSummary.id}</p>
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', color: '#64748b', fontSize: '0.9rem' }}>
+              <div style={{ background: '#f1f5f9', padding: '0.75rem 1rem', borderRadius: '8px' }}>
+                <strong>ETA Target Met</strong>
+              </div>
+              <div style={{ background: '#f1f5f9', padding: '0.75rem 1rem', borderRadius: '8px' }}>
+                <strong>Golden Hour Maintained</strong>
+              </div>
+            </div>
+          </div>
+        </div>
       </DriverLayout>
     );
   }
