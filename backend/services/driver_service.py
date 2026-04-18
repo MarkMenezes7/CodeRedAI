@@ -33,6 +33,7 @@ _FALLBACK_RADIUS_M = 10_000     # 10 km fallback
 _EXTENDED_RADIUS_M = 20_000     # 20 km extended fallback
 _MAX_DRIVERS_TO_NOTIFY = 5      # cap notifications per emergency
 _OFFER_TTL_SECONDS = 60         # configurable offer timeout
+_SIM_DRIVER_EMAIL_REGEX = r"^sim\.mumbai\.driver\d+@codered\.ai$"
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,18 @@ def _authenticated_driver_clauses() -> list[dict[str, Any]]:
             ]
         },
     ]
+
+
+def _exclude_sim_driver_clause() -> dict[str, Any]:
+    """Exclude simulated Mumbai driver accounts from emergency dispatch."""
+    return {
+        "email": {
+            "$not": {
+                "$regex": _SIM_DRIVER_EMAIL_REGEX,
+                "$options": "i",
+            }
+        }
+    }
 
 
 def _serialize_driver_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -120,6 +133,7 @@ def _find_fallback_available_drivers(
             "$and": [
                 query,
                 {"$or": _authenticated_driver_clauses()},
+                _exclude_sim_driver_clause(),
             ]
         }
         if excluded:
@@ -262,10 +276,11 @@ def find_nearest_drivers(
         },
         "dispatch_status": {"$in": ["online", "available"]},
         "$or": _authenticated_driver_clauses(),
+        "$and": [_exclude_sim_driver_clause()],
     }
 
     if exclude_ids:
-        query["email"] = {"$nin": exclude_ids}
+        query["$and"].append({"email": {"$nin": exclude_ids}})
 
     try:
         docs = list(collection.find(query).limit(limit))

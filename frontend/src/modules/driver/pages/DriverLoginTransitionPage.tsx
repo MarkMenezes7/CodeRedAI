@@ -134,7 +134,7 @@ export function DriverLoginTransitionPage() {
   const goToDashboard = () => {
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);
     if (countdownRef.current !== null) window.clearInterval(countdownRef.current);
-    window.location.hash = '/driver/dashboard';
+    window.location.hash = '/driver-dashboard';
   };
 
   useEffect(() => {

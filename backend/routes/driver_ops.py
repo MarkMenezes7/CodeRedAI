@@ -284,6 +284,18 @@ async def driver_active_mission_endpoint(
     )
 
 
+@router.get(
+    "/driver/active-missions",
+    response_model=ActiveMissionResponse,
+    summary="Get the driver's current active mission (alias)",
+)
+async def driver_active_missions_endpoint(
+    driver_id: str = Query(..., description="Driver email/ID"),
+):
+    """Compatibility alias for clients using /active-missions."""
+    return await driver_active_mission_endpoint(driver_id)
+
+
 # ---------------------------------------------------------------------------
 # POST /api/driver/mission/update
 # ---------------------------------------------------------------------------
