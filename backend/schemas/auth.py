@@ -107,6 +107,13 @@ class PresetDriverAccount(BaseModel):
     name: str
     email: str
     callSign: Optional[str] = None
+    phone: Optional[str] = None
+    vehicleNumber: Optional[str] = None
+    linkedHospitalId: Optional[str] = None
+    dispatchStatus: Optional[str] = None
+    isLoggedIn: Optional[bool] = None
+    location: Optional[GeoPoint] = None
+    speedKmph: Optional[float] = None
 
 
 class PresetDriverResponse(BaseModel):

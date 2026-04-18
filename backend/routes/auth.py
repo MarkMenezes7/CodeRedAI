@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Query, Response, status
 
 try:
     from ..schemas.auth import (
@@ -106,8 +106,11 @@ async def driver_login(payload: LoginRequest, response: Response):
 
 
 @router.get("/driver/presets", response_model=PresetDriverResponse)
-async def driver_presets():
-    return get_preset_drivers()
+async def driver_presets(
+    hospitalId: str | None = Query(default=None, description="Filter by linked hospital ID."),
+    availableOnly: bool = Query(default=False, description="Return dashboard-ready non-assigned drivers."),
+):
+    return get_preset_drivers(linked_hospital_id=hospitalId, available_only=availableOnly)
 
 
 @router.post("/admin/signup", response_model=AdminAuthResponse, status_code=status.HTTP_201_CREATED)

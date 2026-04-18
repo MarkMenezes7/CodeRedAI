@@ -234,7 +234,7 @@
 /* ─── Header ─────────────────────────────────────────────────────── */
 .hospital-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 22px;
   padding: 22px 24px;
@@ -246,29 +246,7 @@
 
 .hospital-head-main { display: flex; align-items: flex-start; gap: 16px; min-width: 0; }
 
-.hospital-head-icon-wrap {
-  width: 52px;
-  height: 52px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #d72b2b, #b91c1c);
-  color: #ffffff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 6px 18px rgba(215,43,43,0.3);
-}
-
 .hospital-head-copy { display: grid; gap: 6px; min-width: 0; }
-
-.hospital-eyebrow {
-  margin: 0;
-  font-size: 0.68rem;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--c-red);
-}
 
 .hospital-head h1 {
   margin: 0;
@@ -283,49 +261,25 @@
 .hospital-head-copy > p { margin: 0; color: var(--c-muted); font-size: 0.88rem; line-height: 1.5; max-width: 60ch; }
 .hospital-auth-meta { margin: 2px 0 0; color: var(--c-text); font-size: 0.82rem; font-weight: 700; }
 
-.hospital-head-actions { display: grid; gap: 12px; justify-items: end; flex-shrink: 0; }
-.hospital-head-buttons { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.hospital-head-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.hospital-head-status {
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
 
-.meta-pill {
+.hospital-ping-pill {
+  display: inline-flex;
+  align-items: center;
   min-height: 34px;
-  padding: 0 12px;
+  padding: 0 14px;
   border-radius: 999px;
-  border: 1px solid #d8e0ea;
-  background: #f6f8fc;
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.72rem;
+  border: 1px solid rgba(215, 43, 43, 0.4);
+  background: rgba(215, 43, 43, 0.1);
+  color: #b91c1c;
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--c-text);
+  letter-spacing: 0.06em;
 }
-
-.live-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,59,59,0.3);
-  background: var(--c-red-dim);
-  color: var(--c-red);
-  font-size: 0.67rem;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-.live-pill::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-red);
-  animation: blink 1.4s ease-in-out infinite;
-}
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
 
 /* ─── Buttons ─────────────────────────────────────────────────────── */
 .btn {
@@ -740,42 +694,17 @@
 
 /* ─── Request filters ─────────────────────────────────────────────── */
 .request-filters {
-  position: relative;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-}
-
-.request-filters::-webkit-scrollbar { display: none; }
-
-.request-filters-indicator {
-  position: absolute;
-  left: 2px;
-  top: 2px;
-  bottom: 2px;
-  border-radius: 999px;
-  border: 1px solid rgba(226, 116, 116, 0.84);
-  background: linear-gradient(145deg, rgba(253, 210, 210, 0.86) 0%, rgba(242, 142, 142, 0.64) 100%);
-  box-shadow: 0 8px 20px rgba(136, 24, 24, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.82);
-  transition:
-    transform 420ms cubic-bezier(0.2, 0.9, 0.2, 1),
-    width 420ms cubic-bezier(0.2, 0.9, 0.2, 1),
-    opacity 180ms ease;
-  pointer-events: none;
+  gap: 8px;
+  padding: 2px 0;
 }
 
 .filter-chip {
-  position: relative;
-  z-index: 1;
   flex: 0 0 auto;
-  min-height: 28px;
-  padding: 0 12px;
+  min-height: 30px;
+  padding: 0 14px;
   border-radius: 999px;
   border: 1px solid var(--c-border-hi);
   background: var(--c-raise);
@@ -786,13 +715,14 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
   white-space: nowrap;
-  transition: all 140ms;
+  transition: border-color 140ms, background 140ms, color 140ms, box-shadow 140ms;
 }
 .filter-chip:hover { color: var(--c-text); border-color: var(--c-border-hi); }
 .filter-chip.active {
-  border-color: transparent;
-  background: transparent;
+  border-color: rgba(193, 66, 66, 0.42);
+  background: linear-gradient(160deg, rgba(254, 235, 235, 0.92) 0%, rgba(250, 217, 217, 0.92) 100%);
   color: #6f1d1d;
+  box-shadow: 0 2px 8px rgba(165, 45, 45, 0.12);
 }
 
 /* ─── Request list ────────────────────────────────────────────────── */
@@ -1035,9 +965,7 @@
 
   .hospital-head { flex-direction: column; align-items: stretch; padding: 18px; }
   .hospital-head-main { width: 100%; }
-  .hospital-head-actions { width: 100%; justify-items: start; }
-  .hospital-head-buttons,
-  .hospital-head-meta { justify-content: flex-start; }
+  .hospital-head-status { width: 100%; justify-content: flex-end; }
 
   .hospital-kpi-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .hospital-dashboard-grid,
@@ -1076,7 +1004,6 @@
   .driver-list--expanded { grid-template-columns: 1fr; }
 
   .hospital-head-main { flex-direction: column; gap: 12px; }
-  .hospital-head-icon-wrap { width: 48px; height: 48px; }
 
   .hospital-performance-left { flex-direction: column; gap: 12px; }
   .hospital-performance-metrics { width: 100%; justify-content: space-between; }

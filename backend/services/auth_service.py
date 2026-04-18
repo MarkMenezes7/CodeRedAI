@@ -428,25 +428,79 @@ def get_preset_hospitals(limit: int = 10) -> Dict[str, Any]:
     return {"defaultPassword": DEFAULT_PRESET_PASSWORD, "hospitals": hospitals}
 
 
-def get_preset_drivers(limit: int = 500) -> Dict[str, Any]:
+def get_preset_drivers(
+    limit: int = 500,
+    linked_hospital_id: Optional[str] = None,
+    available_only: bool = False,
+) -> Dict[str, Any]:
     collection = get_drivers_collection()
+    query: Dict[str, Any] = {}
+
+    normalized_hospital_id = (linked_hospital_id or "").strip().upper()
+    if normalized_hospital_id:
+        query["linked_hospital_id"] = normalized_hospital_id
+
+    if available_only:
+        # Treat missing dispatch status as non-assigned so legacy docs are not dropped.
+        query["dispatch_status"] = {"$nin": ["assigned", "on_mission"]}
+
     try:
         docs = list(
-            collection.find({}, {"name": 1, "email": 1, "call_sign": 1})
+            collection.find(
+                query,
+                {
+                    "name": 1,
+                    "email": 1,
+                    "phone": 1,
+                    "call_sign": 1,
+                    "vehicle_number": 1,
+                    "linked_hospital_id": 1,
+                    "dispatch_status": 1,
+                    "is_logged_in": 1,
+                    "location": 1,
+                    "speed_kmph": 1,
+                },
+            )
             .sort("email", 1)
             .limit(limit)
         )
     except PyMongoError as exc:
         _raise_db_unavailable(exc)
-    drivers = [
-        {
-            "id": str(doc["_id"]),
-            "name": doc.get("name", ""),
-            "email": doc.get("email", ""),
-            "callSign": doc.get("call_sign"),
-        }
-        for doc in docs
-    ]
+
+    drivers = []
+    for doc in docs:
+        location_out = None
+        raw_location = doc.get("location")
+        if isinstance(raw_location, dict):
+            if raw_location.get("type") == "Point":
+                coordinates = raw_location.get("coordinates") or []
+                if isinstance(coordinates, list) and len(coordinates) >= 2:
+                    location_out = {
+                        "lat": float(coordinates[1]),
+                        "lng": float(coordinates[0]),
+                    }
+            elif {"lat", "lng"}.issubset(raw_location.keys()):
+                location_out = {
+                    "lat": float(raw_location["lat"]),
+                    "lng": float(raw_location["lng"]),
+                }
+
+        drivers.append(
+            {
+                "id": str(doc["_id"]),
+                "name": doc.get("name", ""),
+                "email": doc.get("email", ""),
+                "phone": doc.get("phone"),
+                "callSign": doc.get("call_sign"),
+                "vehicleNumber": doc.get("vehicle_number"),
+                "linkedHospitalId": doc.get("linked_hospital_id"),
+                "dispatchStatus": doc.get("dispatch_status"),
+                "isLoggedIn": doc.get("is_logged_in"),
+                "location": location_out,
+                "speedKmph": doc.get("speed_kmph"),
+            }
+        )
+
     return {"defaultPassword": DEFAULT_PRESET_PASSWORD, "drivers": drivers}
 
 

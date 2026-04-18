@@ -139,14 +139,10 @@
 }
 
 .map-focus-controls {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 430;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  max-width: min(94%, 760px);
+  margin-top: 4px;
 }
 
 .map-focus-btn {
@@ -217,8 +213,6 @@
   }
 
   .map-focus-controls {
-    top: 8px;
-    left: 8px;
     gap: 5px;
   }
 

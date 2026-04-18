@@ -85,12 +85,6 @@
   box-shadow: 0 8px 18px rgba(194, 37, 37, 0.28);
 }
 
-.auth-page-hint {
-  margin: 0;
-  color: #556274;
-  font-size: 0.87rem;
-}
-
 .auth-page-form {
   display: grid;
   gap: 12px;
@@ -232,41 +226,6 @@
   transform: none;
 }
 
-.auth-page-presets {
-  display: grid;
-  gap: 10px;
-}
-
-.auth-page-presets p {
-  margin: 0;
-  font-size: 0.8rem;
-  color: #5b6778;
-  font-weight: 700;
-}
-
-.auth-page-chip-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 8px;
-}
-
-.auth-page-chip {
-  min-height: 38px;
-  border-radius: 10px;
-  border: 1px solid #d9e2f0;
-  background: #f8fbff;
-  color: #2b415b;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease;
-}
-
-.auth-page-chip:hover {
-  border-color: #b9c9de;
-  background: #edf4ff;
-}
-
 .auth-page-note {
   margin: 0;
   font-size: 0.8rem;
@@ -300,10 +259,6 @@
   .auth-page-role-switch,
   .auth-page-mode-switch {
     border-radius: 10px;
-  }
-
-  .auth-page-chip-grid {
-    grid-template-columns: 1fr;
   }
 
   .auth-page-map-shell {

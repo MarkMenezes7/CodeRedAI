@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
 import Map, { Marker, NavigationControl } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
@@ -54,12 +54,7 @@ const ROLE_CONFIG: Record<AppRole, RoleConfig> = {
 
 const ADMIN_DEFAULT_PASSWORD = 'Admin@123';
 const ADMIN_SIGNUP_ACCESS_CODE = (import.meta.env.VITE_ADMIN_ACCESS_CODE as string | undefined)?.trim() || 'CODERED-ADMIN-ACCESS';
-const ADMIN_QUICK_FILL_EMAILS = [
-  'admin.ops@codered.ai',
-  'admin.verify@codered.ai',
-  'admin.reviews@codered.ai',
-  'admin.compliance@codered.ai',
-];
+const ADMIN_DEFAULT_EMAIL = 'admin.ops@codered.ai';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const STRONG_PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/;
@@ -95,7 +90,7 @@ function initialEmailByRole(role: AppRole, hospitalEmails: string[], driverEmail
     return driverEmails[0] || 'driver1@gmail.com';
   }
 
-  return ADMIN_QUICK_FILL_EMAILS[0];
+  return ADMIN_DEFAULT_EMAIL;
 }
 
 function initialPasswordByRole(role: AppRole, hospitalPassword: string, driverPassword: string) {
@@ -183,30 +178,6 @@ export function AuthPage() {
 
   const activeRoleConfig = ROLE_CONFIG[selectedRole];
 
-  const quickFillEmails = useMemo(() => {
-    if (selectedRole === 'hospital') {
-      return presetHospitalEmails.slice(0, 10);
-    }
-
-    if (selectedRole === 'driver') {
-      return presetDriverEmails.slice(0, 8);
-    }
-
-    return ADMIN_QUICK_FILL_EMAILS;
-  }, [selectedRole, presetHospitalEmails, presetDriverEmails]);
-
-  const credentialHint = useMemo(() => {
-    if (selectedRole === 'hospital') {
-      return `Use hospital1@gmail.com ... hospital10@gmail.com with password ${defaultHospitalPassword || 'Password@123'}.`;
-    }
-
-    if (selectedRole === 'driver') {
-      return `Use driver1@gmail.com ... driver8@gmail.com with password ${defaultDriverPassword || 'Password@123'}.`;
-    }
-
-    return `Use approved admin credentials. Demo password is ${ADMIN_DEFAULT_PASSWORD}.`;
-  }, [selectedRole, defaultHospitalPassword, defaultDriverPassword]);
-
   const setExclusiveSessionForRole = useCallback(
     (role: AppRole) => {
       if (role !== 'hospital') {
@@ -288,14 +259,6 @@ export function AuthPage() {
     setShowPassword(false);
     setShowConfirmPassword(false);
   }, [selectedRole]);
-
-  const handleQuickFill = (candidateEmail: string) => {
-    setEmail(candidateEmail);
-    const nextPassword = initialPasswordByRole(selectedRole, defaultHospitalPassword, defaultDriverPassword);
-    setPassword(nextPassword);
-    setConfirmPassword(nextPassword);
-    setErrorMessage(null);
-  };
 
   const validateForm = () => {
     if (!email.trim() || !password.trim()) {
@@ -513,8 +476,6 @@ export function AuthPage() {
           </div>
         ) : null}
 
-        <p className="auth-page-hint">{credentialHint}</p>
-
         <form className="auth-page-form" onSubmit={handleSubmit}>
           {mode === 'signup' && selectedRole !== 'hospital' ? (
             <label>
@@ -713,24 +674,6 @@ export function AuthPage() {
             {isSubmitting ? 'Please wait...' : submitLabel}
           </button>
         </form>
-
-        {quickFillEmails.length > 0 ? (
-          <div className="auth-page-presets">
-            <p>Quick Fill Accounts</p>
-            <div className="auth-page-chip-grid">
-              {quickFillEmails.map((presetEmail) => (
-                <button
-                  key={presetEmail}
-                  type="button"
-                  className="auth-page-chip"
-                  onClick={() => handleQuickFill(presetEmail)}
-                >
-                  {presetEmail}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
 
         {selectedRole === 'admin' && mode === 'signup' ? (
           <p className="auth-page-note">Admin signup requires an approved internal access code.</p>

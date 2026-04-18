@@ -453,40 +453,6 @@ export function MapView({
           ))}
         </MapContainer>
 
-        <div className="map-focus-controls" role="group" aria-label="Map focus controls">
-          <button
-            type="button"
-            className={`map-focus-btn${focusMode === 'patient' ? ' active' : ''}`}
-            onClick={() => cycleFocusMode('patient')}
-          >
-            Patient ({focusTargetsByMode.patient.length})
-          </button>
-          <button
-            type="button"
-            className={`map-focus-btn${focusMode === 'ambulance' ? ' active' : ''}`}
-            onClick={() => cycleFocusMode('ambulance')}
-          >
-            Ambulance ({focusTargetsByMode.ambulance.length})
-          </button>
-          <button
-            type="button"
-            className={`map-focus-btn${focusMode === 'to_patient' ? ' active' : ''}`}
-            onClick={() => cycleFocusMode('to_patient')}
-          >
-            Going to Patient ({focusTargetsByMode.to_patient.length})
-          </button>
-          <button
-            type="button"
-            className={`map-focus-btn${focusMode === 'to_hospital' ? ' active' : ''}`}
-            onClick={() => cycleFocusMode('to_hospital')}
-          >
-            Going to Hospital ({focusTargetsByMode.to_hospital.length})
-          </button>
-          <button type="button" className="map-focus-btn map-focus-btn-clear" onClick={clearFocusMode}>
-            Clear Focus
-          </button>
-        </div>
-
         <p className="map-note">
           Mumbai live view with real map tiles and road-aligned ambulance movement on each ping cycle.
         </p>
@@ -498,6 +464,40 @@ export function MapView({
         <StatusBadge label="Available Driver" tone="success" />
         <StatusBadge label="Active Trip" tone="danger" />
         <StatusBadge label="Offline Driver" tone="neutral" />
+      </div>
+
+      <div className="map-focus-controls" role="group" aria-label="Map focus controls">
+        <button
+          type="button"
+          className={`map-focus-btn${focusMode === 'patient' ? ' active' : ''}`}
+          onClick={() => cycleFocusMode('patient')}
+        >
+          Patient ({focusTargetsByMode.patient.length})
+        </button>
+        <button
+          type="button"
+          className={`map-focus-btn${focusMode === 'ambulance' ? ' active' : ''}`}
+          onClick={() => cycleFocusMode('ambulance')}
+        >
+          Ambulance ({focusTargetsByMode.ambulance.length})
+        </button>
+        <button
+          type="button"
+          className={`map-focus-btn${focusMode === 'to_patient' ? ' active' : ''}`}
+          onClick={() => cycleFocusMode('to_patient')}
+        >
+          Going to Patient ({focusTargetsByMode.to_patient.length})
+        </button>
+        <button
+          type="button"
+          className={`map-focus-btn${focusMode === 'to_hospital' ? ' active' : ''}`}
+          onClick={() => cycleFocusMode('to_hospital')}
+        >
+          Going to Hospital ({focusTargetsByMode.to_hospital.length})
+        </button>
+        <button type="button" className="map-focus-btn map-focus-btn-clear" onClick={clearFocusMode}>
+          Clear Focus
+        </button>
       </div>
     </div>
   );
