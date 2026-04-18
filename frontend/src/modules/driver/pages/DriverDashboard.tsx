@@ -1558,7 +1558,6 @@ export function DriverDashboard() {
         </section>
       ) : null}
 
-<<<<<<< HEAD
       {latestCarAccidentAlert ? (
         <section className="driver-car-accident-card" aria-label="Incoming car accident alert">
           <div className="driver-car-accident-head">
@@ -1601,8 +1600,6 @@ export function DriverDashboard() {
         </section>
       ) : null}
 
-      <section className="driver-kpi-grid" aria-label="Mission snapshot">
-=======
       <section className="driver-kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }} aria-label="Mission snapshot">
         {/* Real-time stats from Backend */}
         <article className="kpi-card">
@@ -1615,9 +1612,7 @@ export function DriverDashboard() {
           <strong className="mono">₹{apiStats?.totalEarnings?.toLocaleString('en-IN') ?? '--'}</strong>
           <span>Total accumulated</span>
         </article>
-        
-        {/* Local Ops State */}
->>>>>>> b78d3fc229e05ca932ad75f4a07ccec444d4cb18
+
         <article className="kpi-card">
           <p>Status</p>
           <strong>{apiActiveMission ? 'Ongoing Mission' : missionLabel}</strong>
