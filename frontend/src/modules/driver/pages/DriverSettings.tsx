@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   Camera,
   KeyRound,
@@ -24,7 +24,16 @@ import {
 
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
-import { DRIVER_MISSIONS } from '../mockDriverData';
+import {
+  fetchDriverProfile,
+  fetchDriverMissions,
+  fetchDriverStats,
+  updateDriverProfileApi,
+  updateDriverSettingsApi,
+  type DriverProfile as DriverProfileType,
+  type MissionRecord,
+  type DriverStats,
+} from '@shared/utils/driverOpsApi';
 import './DriverSettings.css';
 
 /* ═══════════════════════════════════════════
@@ -143,7 +152,45 @@ export function DriverSettings() {
     return null;
   }
 
-  const linkedHospitalName = DRIVER_MISSIONS[0]?.dropHospitalName ?? 'Karuna Hospital';
+  const [profile, setProfile] = useState<DriverProfileType | null>(null);
+  const [stats, setStats] = useState<DriverStats | null>(null);
+  const [recentMissions, setRecentMissions] = useState<MissionRecord[]>([]);
+  const [hasMissionActive, setHasMissionActive] = useState(false);
+
+  const loadProfileData = useCallback(async () => {
+    if (!driverUser?.email) return;
+    try {
+      const [profileRes, statsRes, missionsRes] = await Promise.all([
+        fetchDriverProfile(driverUser.email),
+        fetchDriverStats(driverUser.email),
+        fetchDriverMissions(driverUser.email),
+      ]);
+      if (profileRes.success) {
+        setProfile(profileRes);
+        setFullName(profileRes.name || driverUser.name || '');
+        setPhone(profileRes.phone || '');
+        setAvailabilityOnline(profileRes.dispatch_status === 'online' || profileRes.dispatch_status === 'available');
+        // Load saved settings
+        const s = profileRes.settings || {};
+        if (typeof s.critical_only === 'boolean') setCriticalOnly(s.critical_only);
+        if (typeof s.mission_alerts === 'boolean') setMissionAlerts(s.mission_alerts);
+        if (typeof s.dispatch_alerts === 'boolean') setDispatchAlerts(s.dispatch_alerts);
+        if (typeof s.backup_alerts === 'boolean') setBackupAlerts(s.backup_alerts);
+        if (typeof s.earnings_alerts === 'boolean') setEarningsAlerts(s.earnings_alerts);
+      }
+      if (statsRes.success) setStats(statsRes);
+      if (missionsRes.success) {
+        setRecentMissions(missionsRes.missions.slice(0, 5));
+        setHasMissionActive(missionsRes.missions.some((m) => m.status === 'Ongoing'));
+      }
+    } catch (err) {
+      console.error('Failed to load profile:', err);
+    }
+  }, [driverUser?.email]);
+
+  useEffect(() => { void loadProfileData(); }, [loadProfileData]);
+
+  const linkedHospitalName = recentMissions[0]?.assignedHospitalName || 'Linked Hospital';
 
   const pushToast = useCallback((message: string, type: 'success' | 'error' = 'success') => {
     const id = Date.now() + ++toastCounter;
@@ -159,14 +206,42 @@ export function DriverSettings() {
   }, []);
 
   const saveSection = useCallback(
-    (label: string) => {
+    async (label: string) => {
       setSavingSection(label);
-      setTimeout(() => {
+      try {
+        if (label === 'Profile') {
+          const res = await updateDriverProfileApi({
+            driver_id: driverUser.email,
+            name: fullName,
+            phone: phone,
+          });
+          pushToast(res.message || `${label} saved.`, res.success ? 'success' : 'error');
+        } else if (label === 'Availability') {
+          const res = await updateDriverSettingsApi({
+            driver_id: driverUser.email,
+            dispatch_status: availabilityOnline ? 'online' : 'offline',
+            critical_only: criticalOnly,
+          });
+          pushToast(res.message || `${label} saved.`, res.success ? 'success' : 'error');
+        } else if (label === 'Notifications') {
+          const res = await updateDriverSettingsApi({
+            driver_id: driverUser.email,
+            mission_alerts: missionAlerts,
+            dispatch_alerts: dispatchAlerts,
+            backup_alerts: backupAlerts,
+            earnings_alerts: earningsAlerts,
+          });
+          pushToast(res.message || `${label} saved.`, res.success ? 'success' : 'error');
+        } else {
+          pushToast(`${label} saved successfully.`, 'success');
+        }
+      } catch (err) {
+        pushToast(`Failed to save ${label}.`, 'error');
+      } finally {
         setSavingSection(null);
-        pushToast(`${label} saved successfully.`, 'success');
-      }, 800);
+      }
     },
-    [pushToast],
+    [pushToast, driverUser?.email, fullName, phone, availabilityOnline, criticalOnly, missionAlerts, dispatchAlerts, backupAlerts, earningsAlerts],
   );
 
   const handlePasswordSave = useCallback(() => {
@@ -204,15 +279,15 @@ export function DriverSettings() {
     { value: 'Hindi', label: 'हिन्दी', emoji: '🇮🇳' },
   ];
 
-  const recentActivity = [
-    { text: 'Mission M-2041 completed', time: '2h ago', dotClass: 'dot-green' },
-    { text: 'Availability set to online', time: '4h ago', dotClass: 'dot-blue' },
-    { text: 'Backup alert acknowledged', time: '1d ago', dotClass: 'dot-yellow' },
-  ];
+  const recentActivity = recentMissions.slice(0, 3).map((m) => ({
+    text: `Mission ${m.missionId.slice(0, 8)} ${m.status.toLowerCase()}`,
+    time: m.createdAt ? new Date(m.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '',
+    dotClass: m.status === 'Completed' ? 'dot-green' : m.status === 'Ongoing' ? 'dot-blue' : 'dot-yellow',
+  }));
 
   return (
     <DriverLayout
-      missionActive={DRIVER_MISSIONS.some((m) => m.status === 'Ongoing')}
+      missionActive={hasMissionActive}
       pickupCount={0}
       onLogout={logoutDriverUser}
     >
@@ -286,20 +361,20 @@ export function DriverSettings() {
           {/* Quick stats */}
           <div className="profile-stats-row">
             <div className="profile-stat-card">
-              <div className="profile-stat-value">142</div>
+              <div className="profile-stat-value">{stats?.totalMissions ?? '—'}</div>
               <div className="profile-stat-label">Missions</div>
             </div>
             <div className="profile-stat-card">
-              <div className="profile-stat-value">98%</div>
-              <div className="profile-stat-label">On-Time</div>
+              <div className="profile-stat-value">{stats?.successRate ? `${stats.successRate}%` : '—'}</div>
+              <div className="profile-stat-label">Success</div>
             </div>
             <div className="profile-stat-card">
-              <div className="profile-stat-value">4.9</div>
-              <div className="profile-stat-label">Rating</div>
+              <div className="profile-stat-value">{stats?.goldenHourRate ? `${stats.goldenHourRate}%` : '—'}</div>
+              <div className="profile-stat-label">Golden Hr</div>
             </div>
             <div className="profile-stat-card">
-              <div className="profile-stat-value">3yr</div>
-              <div className="profile-stat-label">Tenure</div>
+              <div className="profile-stat-value">{profile?.joined_at ? new Date(profile.joined_at).getFullYear() : '—'}</div>
+              <div className="profile-stat-label">Joined</div>
             </div>
           </div>
 

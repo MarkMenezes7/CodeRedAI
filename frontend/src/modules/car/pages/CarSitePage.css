@@ -1,0 +1,293 @@
+.car-site-page {
+  min-height: calc(100vh - 66px);
+  background: linear-gradient(170deg, #f7fbff 0%, #eef4ff 42%, #f9fbff 100%);
+  color: #13253f;
+  padding: 26px;
+  display: grid;
+  gap: 14px;
+}
+
+.car-site-hero,
+.car-card {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+}
+
+.car-site-hero {
+  border: 1px solid #d8e3f2;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 22px;
+  box-shadow: 0 10px 24px rgba(21, 40, 68, 0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.car-site-eyebrow {
+  margin: 0;
+  color: #cf2a2a;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+.car-site-hero h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 2.8vw, 2.4rem);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.car-site-hero p {
+  margin: 0;
+  color: #435f83;
+}
+
+.car-site-hero-actions {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.car-site-link {
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid #ccdae9;
+  background: #eaf3ff;
+  color: #204a74;
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.car-site-link.ghost {
+  background: #ffffff;
+}
+
+.car-site-grid {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.car-card {
+  border: 1px solid #d8e3f2;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 8px 22px rgba(21, 40, 68, 0.07);
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.car-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.car-card-head h2 {
+  margin: 0;
+  font-size: 1.06rem;
+}
+
+.car-card-head span {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #4c6890;
+}
+
+.car-card label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #4d6280;
+}
+
+.car-card input,
+.car-card select {
+  min-height: 40px;
+  border-radius: 10px;
+  border: 1px solid #c8d5e6;
+  background: #fbfdff;
+  color: #11223d;
+  padding: 0 10px;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.car-card input:focus,
+.car-card select:focus {
+  border-color: #e85e5e;
+  box-shadow: 0 0 0 3px rgba(232, 94, 94, 0.15);
+}
+
+.status-line {
+  margin: 0;
+  border: 1px solid #d7e2f1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #f6faff;
+  color: #4c6486;
+  font-size: 0.84rem;
+}
+
+.status-line.status-loading {
+  border-color: rgba(47, 127, 232, 0.36);
+  background: rgba(47, 127, 232, 0.12);
+  color: #25578f;
+}
+
+.status-line.status-ready {
+  border-color: rgba(19, 182, 138, 0.34);
+  background: rgba(19, 182, 138, 0.12);
+  color: #117658;
+}
+
+.status-line.status-error {
+  border-color: rgba(215, 43, 43, 0.38);
+  background: rgba(215, 43, 43, 0.12);
+  color: #8d2222;
+}
+
+.status-line.status-dispatch {
+  border-color: #e8e1cc;
+  background: #fff9eb;
+  color: #6d5323;
+}
+
+.car-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.btn-primary,
+.btn-secondary {
+  min-height: 42px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #ff4343 0%, #d72b2b 100%);
+  border-color: #d72b2b;
+  color: #ffffff;
+}
+
+.btn-secondary {
+  background: #f2f8ff;
+  border-color: #c8d5e6;
+  color: #204a74;
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.empty-message {
+  margin: 0;
+  border: 1px dashed #c8d5e6;
+  border-radius: 10px;
+  padding: 20px;
+  color: #6a7d99;
+  text-align: center;
+}
+
+.alert-feed-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.alert-feed-column {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.alert-feed-column h3 {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #224b74;
+}
+
+.alert-list {
+  display: grid;
+  gap: 6px;
+  max-height: 620px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.alert-list::-webkit-scrollbar {
+  width: 3px;
+}
+
+.alert-list::-webkit-scrollbar-thumb {
+  background: #9bb0cc;
+  border-radius: 999px;
+}
+
+.alert-item {
+  border: 1px solid #d8e3f2;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 9px 10px;
+  display: grid;
+  gap: 3px;
+}
+
+.alert-item strong {
+  font-size: 0.84rem;
+}
+
+.alert-item p {
+  margin: 0;
+  font-size: 0.77rem;
+  color: #4a6385;
+}
+
+.alert-item .stamp {
+  color: #7288a3;
+}
+
+@media (max-width: 1180px) {
+  .car-site-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .car-site-page {
+    padding: 16px;
+  }
+
+  .alert-feed-grid,
+  .car-card-actions {
+    grid-template-columns: 1fr;
+  }
+}

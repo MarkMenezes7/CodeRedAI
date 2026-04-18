@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  CarFront,
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
@@ -19,6 +20,7 @@ import { StatusBadge } from '@shared/components/StatusBadge';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
 import { getPresetDriverAccounts, type PresetDriverAccount } from '@shared/utils/driverAuthApi';
 import {
+  DispatchOffer,
   DriverStatus,
   DriverUnit,
   HospitalBedState,
@@ -26,33 +28,45 @@ import {
   HospitalOpsState,
   OpsEvent,
   OpsEventType,
+  PatientRequest,
   RequestStatus,
   SeverityLevel,
 } from '@shared/types/hospitalOps.types';
-import { createInitialHospitalOpsState } from '@shared/utils/hospitalDemoData';
 import {
-  addIncomingPatientRequest,
+  createInitialHospitalOpsState,
+  MUMBAI_REAL_HOSPITALS,
+} from '@shared/utils/hospitalDemoData';
+import {
+  acceptHospitalCarAccidentAlert,
+  listCarAccidentAlerts,
+  rejectHospitalCarAccidentAlert,
+  type CarAccidentAlert as ApiCarAccidentAlert,
+} from '@shared/utils/carAccidentApi';
+import {
   buildRoadRoute,
-  fetchStrictRoadRouteFromApi,
+  createRoadAnchorAssignments,
   routeDistanceKm,
   runDriverPingCycle,
+  snapPointToRoad,
 } from '@shared/utils/hospitalOpsSimulator';
 import { formatDate } from '@shared/utils/formatters';
 import './HospitalDashboard.css';
 
 const STORAGE_KEY_PREFIX = 'codered-hospital-demo-v3';
+const ALERT_BASELINE_KEY_PREFIX = 'codered-hospital-alert-baseline-v1';
 const DRIVER_PING_SECONDS = 5;
-const AUTO_INTAKE_SECONDS = 42;
 const ROSTER_SYNC_SECONDS = 12;
+const DISPATCH_OFFER_SECONDS = 60;
 const MOBILE_NAV_QUERY = '(max-width: 980px)';
 
-type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds';
+type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds' | 'carAccidents';
 
 const hospitalSections: Array<{ key: HospitalSectionKey; label: string; description: string; icon: LucideIcon }> = [
   { key: 'dashboard',  label: 'Dashboard',            description: 'Analytics and live hospital overview',           icon: LayoutDashboard },
   { key: 'queue',      label: 'Patient Queue',         description: 'Queue, live map, and dispatch control',          icon: Radio },
   { key: 'ambulance',  label: 'Ambulance Dashboard',   description: 'Ambulance and driver operational status',        icon: Truck },
   { key: 'beds',       label: 'Bed Manager',           description: 'Bed and ICU capacity controls',                  icon: ShieldCheck },
+  { key: 'carAccidents', label: 'Car Accidents',       description: 'Airbag-triggered accident alerts and victim details', icon: CarFront },
 ];
 
 function isMobileViewport() {
@@ -114,20 +128,32 @@ const requestFilters: Array<{ key: 'all' | RequestStatus; label: string }> = [
   { key: 'dispatched', label: 'Dispatched' },
 ];
 
-const DEFAULT_HOSPITAL_REF: HospitalLocationRef = {
-  id: 'HSP-MUM-009',
-  name: 'Seven Hills Hospital',
-  address: 'Marol Maroshi Road, Andheri East, Mumbai 400059',
-  location: { lat: 19.1177786, lng: 72.8780686 },
-};
+const DEFAULT_HOSPITAL_REF: HospitalLocationRef =
+  MUMBAI_REAL_HOSPITALS.find((hospital) => hospital.id === 'HSP-MUM-001') ?? {
+    id: 'HSP-MUM-001',
+    name: 'Karuna Hospital',
+    address: 'SVP Road, Dahisar West, Mumbai 400103',
+    location: { lat: 19.244077, lng: 72.855981 },
+  };
 
-interface ClosestDriverSuggestion {
-  requestId: string;
-  driverId: string;
-  driverCallSign: string;
-  driverName: string;
-  distanceKm: number;
-  etaMinutes: number;
+const knownHospitalRefById = new globalThis.Map(
+  MUMBAI_REAL_HOSPITALS.map((hospital) => [hospital.id.toUpperCase(), hospital]),
+);
+
+function normalizeHospitalIdentifier(value: string | null | undefined) {
+  const normalized = (value ?? '').trim().toUpperCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function findHospitalCodeCandidate(values: Array<string | null | undefined>) {
+  for (const value of values) {
+    const normalized = normalizeHospitalIdentifier(value);
+    if (normalized && normalized.startsWith('HSP-')) {
+      return normalized;
+    }
+  }
+
+  return null;
 }
 
 function sanitizeCallSign(value: string | undefined) {
@@ -147,9 +173,13 @@ function createRosterDriverUnit(
   seedIndex: number,
 ): DriverUnit {
   const angle = ((seedIndex * 57) % 360) * (Math.PI / 180);
-  const radius = 0.004 + ((seedIndex % 8) + 1) * 0.00045;
+  const radius = 0.0012 + ((seedIndex % 8) + 1) * 0.0002;
   const latOffset = Math.sin(angle) * radius;
   const lngOffset = Math.cos(angle) * radius;
+  const seededLocation = snapPointToRoad({
+    lat: hospitalLocation.lat + latOffset,
+    lng: hospitalLocation.lng + lngOffset,
+  });
 
   return {
     id: account.id,
@@ -160,15 +190,54 @@ function createRosterDriverUnit(
     linkedHospitalId: hospitalId,
     status: 'available',
     occupied: false,
-    location: {
-      lat: hospitalLocation.lat + latOffset,
-      lng: hospitalLocation.lng + lngOffset,
-    },
+    location: seededLocation,
     speedKmph: 38 + (seedIndex % 14),
     fuelPct: 58 + (seedIndex % 40),
     lastPingAt: new Date().toISOString(),
     pingIntervalSec: 6,
     secondsSincePing: 0,
+  };
+}
+
+function withRoadSnappedDriverLocations(state: HospitalOpsState): HospitalOpsState {
+  const idleDrivers = state.drivers
+    .filter((driver) => driver.status === 'available' && !driver.occupied && !driver.assignment)
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const idleAnchors = createRoadAnchorAssignments({
+    hospitalLocation: state.hospital.location,
+    count: idleDrivers.length,
+    closeShare: 0.28,
+  });
+  const idleAnchorByDriverId = new globalThis.Map(
+    idleDrivers.map((driver, index) => [driver.id, idleAnchors[index]]),
+  );
+
+  let hasChanges = false;
+
+  const drivers = state.drivers.map((driver) => {
+    const snappedLocation = snapPointToRoad(driver.location);
+    const targetAnchor = idleAnchorByDriverId.get(driver.id);
+    const nextLocation = targetAnchor ? snapPointToRoad(targetAnchor) : snappedLocation;
+
+    if (nextLocation.lat === driver.location.lat && nextLocation.lng === driver.location.lng) {
+      return driver;
+    }
+
+    hasChanges = true;
+    return {
+      ...driver,
+      location: nextLocation,
+    };
+  });
+
+  if (!hasChanges) {
+    return state;
+  }
+
+  return {
+    ...state,
+    drivers,
   };
 }
 
@@ -239,17 +308,34 @@ function stateStorageKey(hospitalId: string) {
   return `${STORAGE_KEY_PREFIX}-${hospitalId}`;
 }
 
+function alertBaselineStorageKey(hospitalId: string) {
+  return `${ALERT_BASELINE_KEY_PREFIX}-${hospitalId}`;
+}
+
 function loadInitialState(hospitalRef: HospitalLocationRef) {
-  if (typeof window === 'undefined') return createInitialHospitalOpsState(hospitalRef);
+  if (typeof window === 'undefined') {
+    return withRoadSnappedDriverLocations(createInitialHospitalOpsState(hospitalRef));
+  }
+
   const persisted = window.localStorage.getItem(stateStorageKey(hospitalRef.id));
-  if (!persisted) return createInitialHospitalOpsState(hospitalRef);
+  if (!persisted) {
+    return withRoadSnappedDriverLocations(createInitialHospitalOpsState(hospitalRef));
+  }
+
   try {
     const parsed = JSON.parse(persisted) as unknown;
-    if (isHospitalOpsState(parsed)) return parsed;
+    if (isHospitalOpsState(parsed)) {
+      return withRoadSnappedDriverLocations({
+        ...parsed,
+        carAccidents: Array.isArray(parsed.carAccidents) ? parsed.carAccidents : [],
+        pendingDispatchOffers: Array.isArray(parsed.pendingDispatchOffers) ? parsed.pendingDispatchOffers : [],
+      });
+    }
   } catch {
-    return createInitialHospitalOpsState(hospitalRef);
+    return withRoadSnappedDriverLocations(createInitialHospitalOpsState(hospitalRef));
   }
-  return createInitialHospitalOpsState(hospitalRef);
+
+  return withRoadSnappedDriverLocations(createInitialHospitalOpsState(hospitalRef));
 }
 
 function createEvent(type: OpsEventType, message: string, requestId?: string, driverId?: string): OpsEvent {
@@ -293,101 +379,245 @@ function adjustBeds(beds: HospitalBedState, field: keyof HospitalBedState, delta
   return { nextBeds, changed };
 }
 
-function dispatchRequestToDriver(
-  state: HospitalOpsState,
-  requestId: string,
-  driverId: string,
-  routeToPatient: { lat: number; lng: number }[],
-  routeToHospital: { lat: number; lng: number }[],
-) {
-  const request = state.requests.find((item) => item.id === requestId);
-  const driver = state.drivers.find((item) => item.id === driverId);
-  if (!request || !driver) return state;
-  if (!(request.status === 'new' || request.status === 'triaged')) return state;
-  if (driver.status !== 'available' || driver.occupied) return state;
-  if (routeToPatient.length < 2 || routeToHospital.length < 2) return state;
-
-  const routeStartPoint = routeToPatient[0] ?? driver.location;
-  const routeDistance = routeDistanceKm(routeToPatient);
-  const etaMinutes = Math.max(1, Math.round((routeDistance / Math.max(driver.speedKmph, 24)) * 60));
-  const nowIso = new Date().toISOString();
-
-  const requests = state.requests.map((item) =>
-    item.id !== requestId
-      ? item
-      : {
-          ...item,
-          status: 'dispatched' as const,
-          assignedDriverId: driverId,
-          hospitalId: state.hospital.id,
-          notes: `${item.notes ? `${item.notes} | ` : ''}Dispatched to ${driver.callSign}.`,
-        },
-  );
-
-  const drivers = state.drivers.map((item) =>
-    item.id !== driverId
-      ? item
-      : {
-          ...item,
-          location: { lat: routeStartPoint.lat, lng: routeStartPoint.lng },
-          status: 'to_patient' as const,
-          occupied: false,
-          assignment: {
-            requestId,
-            stage: 'to_patient' as const,
-            stageTicks: 0,
-            route: routeToPatient,
-            routeIndex: 1,
-            hospitalRoute: routeToHospital,
-          },
-          etaMinutes,
-          lastPingAt: nowIso,
-          secondsSincePing: 0,
-        },
-  );
-
-  return appendEvent(
-    { ...state, requests, drivers },
-    'dispatch',
-    `${driver.callSign} dispatched to ${request.id} (${request.severity.toUpperCase()}).`,
-    request.id,
-    driver.id,
-  );
-}
-
 function formatPingAge(lastPingAt: string) {
   const seconds = Math.max(0, Math.round((Date.now() - new Date(lastPingAt).getTime()) / 1000));
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
 }
 
+function formatCarAlertDateTime(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+}
+
 function eventTone(eventType: OpsEventType): 'neutral' | 'info' | 'success' | 'warning' | 'danger' {
   if (eventType === 'incoming') return 'danger';
+  if (eventType === 'car_accident') return 'danger';
   if (eventType === 'triage' || eventType === 'capacity') return 'warning';
   if (eventType === 'handover') return 'success';
   if (eventType === 'dispatch' || eventType === 'arrival') return 'info';
   return 'neutral';
 }
 
+function hasHospitalCapacity(beds: HospitalBedState) {
+  const availableBeds = Math.max(0, beds.totalBeds - beds.occupiedBeds);
+  const availableIcu = Math.max(0, beds.icuTotal - beds.icuOccupied);
+  return availableBeds > 0 && availableIcu > 0;
+}
+
+function requestIdFromAlertId(alertId: string) {
+  return `CAR-${alertId}`;
+}
+
+function getActiveHospitalCandidateId(request: PatientRequest): string | null {
+  const candidates = request.hospitalCandidateIds ?? [];
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const rejected = new Set(request.hospitalRejectedIds ?? []);
+  const nextCandidate = candidates.find((candidateId) => !rejected.has(candidateId));
+  return nextCandidate ?? null;
+}
+
+function toLiveRequest(alert: ApiCarAccidentAlert, previousRequest?: PatientRequest): PatientRequest {
+  const assignedHospitalLocation =
+    typeof alert.assignedHospitalLat === 'number' && typeof alert.assignedHospitalLng === 'number'
+      ? { lat: alert.assignedHospitalLat, lng: alert.assignedHospitalLng }
+      : previousRequest?.destinationHospitalLocation;
+
+  const status: RequestStatus =
+    alert.status === 'resolved'
+      ? 'completed'
+      : alert.assignedDriverId
+        ? 'dispatched'
+        : alert.assignedHospitalId
+          ? 'triaged'
+          : 'new';
+
+  return {
+    id: requestIdFromAlertId(alert.id),
+    sourceAlertId: alert.id,
+    patientName: alert.personName,
+    age: previousRequest?.age ?? 35,
+    symptom: previousRequest?.symptom ?? `${alert.carName} ${alert.carModel} collision`,
+    severity: alert.severity,
+    location: { lat: alert.lat, lng: alert.lng },
+    address: previousRequest?.address ?? `${alert.lat.toFixed(5)}, ${alert.lng.toFixed(5)}`,
+    channel: 'whatsapp',
+    reportedAt: alert.createdAt,
+    status,
+    assignedDriverId: alert.assignedDriverId ?? undefined,
+    hospitalId: alert.assignedHospitalId ?? undefined,
+    destinationHospitalName: alert.assignedHospitalName ?? previousRequest?.destinationHospitalName,
+    destinationHospitalAddress: alert.assignedHospitalAddress ?? previousRequest?.destinationHospitalAddress,
+    destinationHospitalLocation: assignedHospitalLocation,
+    driverCandidateIds: Array.isArray(alert.notifiedDriverIds) ? alert.notifiedDriverIds : [],
+    hospitalCandidateIds: Array.isArray(alert.notifiedHospitalIds) ? alert.notifiedHospitalIds : [],
+    hospitalRejectedIds: Array.isArray(alert.hospitalRejectedIds) ? alert.hospitalRejectedIds : [],
+    driverRejectedIds: Array.isArray(alert.driverRejectedIds) ? alert.driverRejectedIds : [],
+    hospitalAcceptedAt: alert.assignedHospitalId
+      ? previousRequest?.hospitalAcceptedAt ?? new Date().toISOString()
+      : undefined,
+    notes: [previousRequest?.notes, alert.notes].filter(Boolean).join(' | ') || undefined,
+  };
+}
+
+function syncLiveAlertsIntoOpsState(state: HospitalOpsState, alerts: ApiCarAccidentAlert[]): HospitalOpsState {
+  const previousRequestsByAlertId = new Map<string, PatientRequest>();
+  state.requests.forEach((request) => {
+    if (request.sourceAlertId) {
+      previousRequestsByAlertId.set(request.sourceAlertId, request);
+    }
+  });
+
+  const nextRequests = alerts.map((alert) => toLiveRequest(alert, previousRequestsByAlertId.get(alert.id)));
+  const nextRequestsById = new Map(nextRequests.map((request) => [request.id, request]));
+  const now = Date.now();
+  const existingOffers = Array.isArray(state.pendingDispatchOffers) ? state.pendingDispatchOffers : [];
+
+  const nextPendingOffers = existingOffers.filter((offer) => {
+    const request = nextRequestsById.get(offer.requestId);
+    if (!request) {
+      return false;
+    }
+
+    if (request.status === 'completed' || request.status === 'cancelled' || request.assignedDriverId) {
+      return false;
+    }
+
+    if (new Date(offer.expiresAt).getTime() <= now) {
+      return false;
+    }
+
+    if (request.driverRejectedIds?.includes(offer.offeredDriverId)) {
+      return false;
+    }
+
+    if (request.driverCandidateIds?.length && !request.driverCandidateIds.includes(offer.offeredDriverId)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  const offerKeySet = new Set(
+    nextPendingOffers.map((offer) => `${offer.requestId}:${offer.offeredDriverId}`),
+  );
+
+  nextRequests.forEach((request) => {
+    if (request.status === 'completed' || request.status === 'cancelled' || request.assignedDriverId) {
+      return;
+    }
+
+    const candidateIds = new Set(request.driverCandidateIds ?? []);
+    const rejectedIds = new Set(request.driverRejectedIds ?? []);
+
+    const closestAvailableDrivers = state.drivers
+      .filter((driver) => {
+        if (driver.status !== 'available' || driver.occupied) {
+          return false;
+        }
+
+        if (candidateIds.size > 0 && !candidateIds.has(driver.id)) {
+          return false;
+        }
+
+        if (rejectedIds.has(driver.id)) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((left, right) => {
+        const leftDistance = routeDistanceKm(buildRoadRoute(left.location, request.location));
+        const rightDistance = routeDistanceKm(buildRoadRoute(right.location, request.location));
+        return leftDistance - rightDistance;
+      })
+      .slice(0, 5);
+
+    closestAvailableDrivers.forEach((driver) => {
+      const offerKey = `${request.id}:${driver.id}`;
+      if (offerKeySet.has(offerKey)) {
+        return;
+      }
+
+      const offeredAtTs = Date.now();
+      const nextOffer: DispatchOffer = {
+        id: `AUTO-${request.id}-${driver.id}-${offeredAtTs}`,
+        requestId: request.id,
+        offeredDriverId: driver.id,
+        offeredAt: new Date(offeredAtTs).toISOString(),
+        expiresAt: new Date(offeredAtTs + DISPATCH_OFFER_SECONDS * 1000).toISOString(),
+      };
+
+      nextPendingOffers.push(nextOffer);
+      offerKeySet.add(offerKey);
+    });
+  });
+
+  const existingRequestIdSet = new Set(state.requests.map((request) => request.id));
+  const incomingEvents = nextRequests
+    .filter((request) => !existingRequestIdSet.has(request.id))
+    .map((request) =>
+      createEvent(
+        'car_accident',
+        `${request.id} received from WhatsApp crash workflow at ${request.address}.`,
+        request.id,
+      ),
+    );
+
+  return {
+    ...state,
+    requests: nextRequests,
+    pendingDispatchOffers: nextPendingOffers,
+    events: [...incomingEvents, ...state.events].slice(0, 60),
+  };
+}
+
 export function HospitalDashboard() {
   const {
-    driverUser,
     hospitalUser,
     isHospitalAuthenticated,
     logoutHospitalUser,
   } = useHospitalAuth();
 
   const activeHospitalRef = useMemo<HospitalLocationRef>(
-    () =>
-      hospitalUser
-        ? {
-            id: hospitalUser.id,
-            name: hospitalUser.name,
-            address: hospitalUser.address ?? DEFAULT_HOSPITAL_REF.address,
-            location: hospitalUser.location
-              ? { ...hospitalUser.location }
-              : { ...DEFAULT_HOSPITAL_REF.location },
-          }
-        : DEFAULT_HOSPITAL_REF,
+    () => {
+      if (!hospitalUser) {
+        return DEFAULT_HOSPITAL_REF;
+      }
+
+      const hospitalCode = findHospitalCodeCandidate([
+        hospitalUser.hospitalId,
+        hospitalUser.id,
+        hospitalUser.name,
+      ]);
+      const resolvedHospitalId = hospitalCode ?? hospitalUser.hospitalId ?? hospitalUser.id;
+      const knownHospital = hospitalCode ? knownHospitalRefById.get(hospitalCode) : undefined;
+
+      return {
+        id: resolvedHospitalId,
+        name: hospitalUser.name || knownHospital?.name || DEFAULT_HOSPITAL_REF.name,
+        address: hospitalUser.address ?? knownHospital?.address ?? DEFAULT_HOSPITAL_REF.address,
+        location: hospitalUser.location
+          ? { ...hospitalUser.location }
+          : knownHospital
+            ? { ...knownHospital.location }
+            : { ...DEFAULT_HOSPITAL_REF.location },
+      };
+    },
     [hospitalUser],
   );
 
@@ -399,9 +629,12 @@ export function HospitalDashboard() {
   const [isDesktopNavOpen, setIsDesktopNavOpen] = useState(true);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [dispatchNotice, setDispatchNotice] = useState<string | null>(null);
-  const [closestSuggestion, setClosestSuggestion] = useState<ClosestDriverSuggestion | null>(null);
-  const [isResolvingRoute, setIsResolvingRoute] = useState(false);
+  const [carAccidents, setCarAccidents] = useState<ApiCarAccidentAlert[]>([]);
+  const [isCarAccidentsLoading, setIsCarAccidentsLoading] = useState(false);
+  const [carAccidentsError, setCarAccidentsError] = useState<string | null>(null);
+  const [alertsBaselineIso, setAlertsBaselineIso] = useState<string>('1970-01-01T00:00:00.000Z');
   const requestFilterRef = useRef<HTMLDivElement | null>(null);
+  const requestListRef = useRef<HTMLDivElement | null>(null);
   const [filterIndicatorStyle, setFilterIndicatorStyle] = useState({ left: 0, width: 0, visible: false });
 
   const syncFilterIndicator = useCallback(() => {
@@ -433,9 +666,17 @@ export function HospitalDashboard() {
     setSelectedDriverId(null);
     setRequestFilter('all');
     setActiveSection('dashboard');
-    setClosestSuggestion(null);
     setDispatchNotice(null);
   }, [activeHospitalRef, hospitalUser]);
+
+  useEffect(() => {
+    if (!hospitalUser || typeof window === 'undefined') {
+      return;
+    }
+
+    // Always start from epoch on load so stale local baselines never hide real alerts.
+    setAlertsBaselineIso('1970-01-01T00:00:00.000Z');
+  }, [activeHospitalRef.id, hospitalUser]);
 
   useEffect(() => {
     if (!hospitalUser) {
@@ -476,10 +717,12 @@ export function HospitalDashboard() {
             return previousState;
           }
 
-          return {
+          const mergedState: HospitalOpsState = {
             ...previousState,
             drivers: mergedDrivers,
           };
+
+          return withRoadSnappedDriverLocations(mergedState);
         });
       } catch {
         // Keep existing roster when backend presets are temporarily unavailable.
@@ -496,25 +739,6 @@ export function HospitalDashboard() {
       isDisposed = true;
       window.clearInterval(intervalId);
     };
-  }, [hospitalUser]);
-
-  useEffect(() => {
-    if (!hospitalUser) {
-      return;
-    }
-
-    const id = window.setInterval(() => {
-      setOpsState((prev) => {
-        const active = prev.requests.filter(
-          (r) => r.status !== 'completed' && r.status !== 'cancelled',
-        ).length;
-        if (active >= 10) return prev;
-        if (Math.random() < 0.58) return addIncomingPatientRequest(prev);
-        return prev;
-      });
-    }, AUTO_INTAKE_SECONDS * 1000);
-
-    return () => window.clearInterval(id);
   }, [hospitalUser]);
 
   useEffect(() => {
@@ -555,29 +779,188 @@ export function HospitalDashboard() {
   }, [requestFilter, syncFilterIndicator]);
 
   useEffect(() => {
-    if (!closestSuggestion) return;
-    if (selectedRequestId !== closestSuggestion.requestId) setClosestSuggestion(null);
-  }, [closestSuggestion, selectedRequestId]);
-
-  useEffect(() => {
     if (!dispatchNotice) return;
     const id = window.setTimeout(() => setDispatchNotice(null), 4200);
     return () => window.clearTimeout(id);
   }, [dispatchNotice]);
 
-  const linkedDrivers = useMemo(
-    () => opsState.drivers.filter((d) => d.linkedHospitalId === opsState.hospital.id),
-    [opsState.drivers, opsState.hospital.id],
+  const refreshCarAccidents = useCallback(
+    async (withLoading: boolean) => {
+      if (!isHospitalAuthenticated || !hospitalUser) {
+        setCarAccidents([]);
+        setCarAccidentsError(null);
+        setIsCarAccidentsLoading(false);
+        return;
+      }
+
+      if (withLoading) {
+        setIsCarAccidentsLoading(true);
+      }
+
+      try {
+        const alerts = await listCarAccidentAlerts(100);
+        const sortedAlerts = [...alerts].sort(
+          (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
+        );
+        const baselineTimestamp = Date.parse(alertsBaselineIso);
+        const baselineFilteredAlerts = Number.isFinite(baselineTimestamp)
+          ? sortedAlerts.filter((alert) => Date.parse(alert.createdAt) >= baselineTimestamp)
+          : sortedAlerts;
+        const visibleAlerts =
+          baselineFilteredAlerts.length === 0 && sortedAlerts.length > 0
+            ? sortedAlerts
+            : baselineFilteredAlerts;
+
+        setCarAccidents(visibleAlerts);
+        setCarAccidentsError(null);
+        setOpsState((previousState) => syncLiveAlertsIntoOpsState(previousState, visibleAlerts));
+      } catch (error) {
+        setCarAccidentsError(error instanceof Error ? error.message : 'Unable to load car accident alerts.');
+      } finally {
+        if (withLoading) {
+          setIsCarAccidentsLoading(false);
+        }
+      }
+    },
+    [alertsBaselineIso, hospitalUser, isHospitalAuthenticated],
+  );
+
+  useEffect(() => {
+    if (!isHospitalAuthenticated || !hospitalUser) {
+      setCarAccidents([]);
+      setCarAccidentsError(null);
+      setIsCarAccidentsLoading(false);
+      return;
+    }
+
+    let isDisposed = false;
+
+    const runRefresh = async (withLoading: boolean) => {
+      if (isDisposed) {
+        return;
+      }
+
+      await refreshCarAccidents(withLoading);
+    };
+
+    void runRefresh(true);
+
+    const intervalId = window.setInterval(() => {
+      void runRefresh(false);
+    }, 3_000);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [hospitalUser, isHospitalAuthenticated, refreshCarAccidents]);
+
+  const linkedDrivers = useMemo(() => {
+    const normalizedStateHospitalId = normalizeHospitalIdentifier(opsState.hospital.id);
+    const normalizedUserHospitalId = normalizeHospitalIdentifier(hospitalUser?.hospitalId);
+    const normalizedUserHospitalCode = findHospitalCodeCandidate([hospitalUser?.name]);
+
+    return opsState.drivers.filter((driver) => {
+      const normalizedLinkedHospitalId = normalizeHospitalIdentifier(driver.linkedHospitalId);
+      if (!normalizedLinkedHospitalId) {
+        return false;
+      }
+
+      return (
+        normalizedLinkedHospitalId === normalizedStateHospitalId ||
+        normalizedLinkedHospitalId === normalizedUserHospitalId ||
+        normalizedLinkedHospitalId === normalizedUserHospitalCode
+      );
+    });
+  }, [hospitalUser?.hospitalId, hospitalUser?.name, opsState.drivers, opsState.hospital.id]);
+
+  const currentHospitalIdentitySet = useMemo(() => {
+    const identities = new Set<string>();
+    const addIdentity = (value: string | null | undefined) => {
+      const normalized = normalizeHospitalIdentifier(value);
+      if (normalized) {
+        identities.add(normalized);
+      }
+    };
+
+    const derivedHospitalCode = findHospitalCodeCandidate([
+      hospitalUser?.hospitalId,
+      hospitalUser?.id,
+      hospitalUser?.name,
+      opsState.hospital.id,
+      opsState.hospital.name,
+    ]);
+
+    addIdentity(opsState.hospital.id);
+    addIdentity(opsState.hospital.name);
+    addIdentity(hospitalUser?.hospitalId);
+    addIdentity(hospitalUser?.id);
+    addIdentity(hospitalUser?.name);
+    addIdentity(derivedHospitalCode);
+
+    return identities;
+  }, [hospitalUser?.hospitalId, hospitalUser?.id, hospitalUser?.name, opsState.hospital.id, opsState.hospital.name]);
+
+  const currentHospitalDecisionId = useMemo(() => {
+    const preferredCode = findHospitalCodeCandidate([
+      hospitalUser?.hospitalId,
+      hospitalUser?.id,
+      hospitalUser?.name,
+      opsState.hospital.id,
+      opsState.hospital.name,
+    ]);
+
+    if (preferredCode) {
+      return preferredCode;
+    }
+
+    return hospitalUser?.hospitalId ?? hospitalUser?.id ?? opsState.hospital.id;
+  }, [hospitalUser?.hospitalId, hospitalUser?.id, hospitalUser?.name, opsState.hospital.id, opsState.hospital.name]);
+
+  const isCurrentHospitalIdentity = useCallback(
+    (candidateId: string | null | undefined) => {
+      const normalized = normalizeHospitalIdentifier(candidateId);
+      if (!normalized) {
+        return false;
+      }
+
+      return currentHospitalIdentitySet.has(normalized);
+    },
+    [currentHospitalIdentitySet],
+  );
+
+  const activeCarAccidents = useMemo(
+    () => carAccidents.filter((alert) => alert.status !== 'resolved'),
+    [carAccidents],
+  );
+
+  const newCarAccidentsCount = useMemo(
+    () => carAccidents.filter((alert) => alert.status === 'new').length,
+    [carAccidents],
   );
 
   const openRequests = useMemo(
-    () => opsState.requests.filter((r) => r.status !== 'completed' && r.status !== 'cancelled'),
-    [opsState.requests],
+    () =>
+      opsState.requests.filter((request) => {
+        if (request.status === 'completed' || request.status === 'cancelled') {
+          return false;
+        }
+
+        if (isCurrentHospitalIdentity(request.hospitalId)) {
+          return true;
+        }
+
+        return isCurrentHospitalIdentity(getActiveHospitalCandidateId(request));
+      }),
+    [isCurrentHospitalIdentity, opsState.requests],
   );
 
   const dispatchableRequests = useMemo(
-    () => openRequests.filter((r) => r.status === 'new' || r.status === 'triaged'),
-    [openRequests],
+    () =>
+      openRequests.filter(
+        (request) => !request.hospitalId && isCurrentHospitalIdentity(getActiveHospitalCandidateId(request)),
+      ),
+    [isCurrentHospitalIdentity, openRequests],
   );
 
   const filteredRequests = useMemo(() => {
@@ -594,11 +977,6 @@ export function HospitalDashboard() {
     [linkedDrivers],
   );
 
-  const loggedInAvailableDriver = useMemo(
-    () => (driverUser ? availableDrivers.find((driver) => driver.id === driverUser.id) ?? null : null),
-    [availableDrivers, driverUser],
-  );
-
   const activeTrips = useMemo(
     () => linkedDrivers.filter((d) => ['to_patient', 'with_patient', 'to_hospital'].includes(d.status)).length,
     [linkedDrivers],
@@ -611,16 +989,6 @@ export function HospitalDashboard() {
     if (pool.length === 0) return 0;
     return Math.round(pool.reduce((a, v) => a + v, 0) / pool.length);
   }, [linkedDrivers]);
-
-  const selectedRequest = useMemo(
-    () => (selectedRequestId ? opsState.requests.find((r) => r.id === selectedRequestId) ?? null : null),
-    [opsState.requests, selectedRequestId],
-  );
-
-  const selectedDriver = useMemo(
-    () => (selectedDriverId ? linkedDrivers.find((d) => d.id === selectedDriverId) ?? null : null),
-    [linkedDrivers, selectedDriverId],
-  );
 
   const availableBeds = opsState.hospital.beds.totalBeds - opsState.hospital.beds.occupiedBeds;
   const availableIcuBeds = opsState.hospital.beds.icuTotal - opsState.hospital.beds.icuOccupied;
@@ -643,136 +1011,146 @@ export function HospitalDashboard() {
   const recentPriorityRequests = useMemo(() => [...openRequests].sort((a, b) => { const sd = (severityPriority[b.severity] ?? 0) - (severityPriority[a.severity] ?? 0); return sd !== 0 ? sd : new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime(); }).slice(0, 5), [openRequests]);
   const capacityEvents = useMemo(() => opsState.events.filter((e) => e.type === 'capacity'), [opsState.events]);
   const activeSectionMeta = useMemo(() => hospitalSections.find((s) => s.key === activeSection) ?? hospitalSections[0]!, [activeSection]);
+  const openRequestById = useMemo(
+    () => new globalThis.Map(openRequests.map((request) => [request.id, request])),
+    [openRequests],
+  );
+  const requestByAlertId = useMemo(
+    () => new globalThis.Map(opsState.requests.filter((request) => request.sourceAlertId).map((request) => [request.sourceAlertId as string, request])),
+    [opsState.requests],
+  );
+  const selectedQueueRequest = useMemo(
+    () => (selectedRequestId ? openRequests.find((request) => request.id === selectedRequestId) ?? null : null),
+    [openRequests, selectedRequestId],
+  );
 
-  const handleSimulateIncoming = () => {
-    setOpsState((prev) => addIncomingPatientRequest(prev));
-    setDispatchNotice('Simulated one incoming patient request.');
-  };
+  const isAwaitingHospitalDecision = useCallback(
+    (request: PatientRequest) =>
+      !request.hospitalId && isCurrentHospitalIdentity(getActiveHospitalCandidateId(request)),
+    [isCurrentHospitalIdentity],
+  );
 
-  const handleResetDemo = () => {
-    setOpsState(createInitialHospitalOpsState(activeHospitalRef));
-    setSelectedDriverId(null);
-    setSelectedRequestId(null);
-    setRequestFilter('all');
-    setClosestSuggestion(null);
-    setDispatchNotice('Demo data has been reset to baseline.');
-  };
+  const isAcceptedByCurrentHospital = useCallback(
+    (request: PatientRequest) => isCurrentHospitalIdentity(request.hospitalId),
+    [isCurrentHospitalIdentity],
+  );
 
-  const handleTriageRequest = (requestId: string) => {
-    setOpsState((prev) => {
-      const request = prev.requests.find((r) => r.id === requestId);
-      if (!request || request.status !== 'new') return prev;
-      const requests = prev.requests.map((r) =>
-        r.id !== requestId
-          ? r
-          : {
-              ...r,
-              status: 'triaged' as const,
-              hospitalId: prev.hospital.id,
-              notes: `${r.notes ? `${r.notes} | ` : ''}Triaged by hospital desk.`,
-            },
-      );
-      return appendEvent({ ...prev, requests }, 'triage', `${request.id} triaged as ${request.severity.toUpperCase()}.`, request.id);
-    });
-    setSelectedRequestId(requestId);
-    setDispatchNotice(`Request ${requestId} moved to triaged queue.`);
-  };
+  useEffect(() => {
+    if (!selectedRequestId) {
+      return;
+    }
 
-  const dispatchWithDriver = async (requestId: string, driverId: string, mode: 'manual' | 'auto') => {
-    const request = opsState.requests.find((r) => r.id === requestId);
-    const driver = linkedDrivers.find((d) => d.id === driverId);
-    if (!request || !driver) { setDispatchNotice('Unable to dispatch. Reselect request/driver.'); return; }
-    if (!(request.status === 'new' || request.status === 'triaged')) { setDispatchNotice('Only new or triaged requests can be dispatched.'); return; }
-    if (driver.status !== 'available' || driver.occupied) { setDispatchNotice('Selected driver is not available.'); return; }
+    const listNode = requestListRef.current;
+    if (!listNode) {
+      return;
+    }
 
-    setIsResolvingRoute(true);
+    const requestNode = listNode.querySelector<HTMLElement>(`[data-request-id="${selectedRequestId}"]`);
+    if (!requestNode) {
+      return;
+    }
 
-    try {
-      const [routeToPatient, routeToHospital] = await Promise.all([
-        fetchStrictRoadRouteFromApi(driver.location, request.location),
-        fetchStrictRoadRouteFromApi(request.location, opsState.hospital.location),
-      ]);
+    requestNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [filteredRequests, selectedRequestId]);
 
-      if (!routeToPatient || !routeToHospital) {
-        setDispatchNotice('Could not fetch a drivable road route right now. Please try again.');
+  const handleHospitalAlertDecision = useCallback(
+    async (request: PatientRequest, action: 'accept' | 'reject') => {
+      if (!request.sourceAlertId) {
+        setDispatchNotice('This request is not linked to a live alert.');
         return;
       }
 
-      setOpsState((prev) =>
-        dispatchRequestToDriver(prev, requestId, driverId, routeToPatient, routeToHospital),
-      );
-      setSelectedRequestId(requestId);
-      setSelectedDriverId(driverId);
-      setClosestSuggestion(null);
-      setDispatchNotice(`${mode === 'auto' ? 'Auto-dispatched' : 'Dispatched'} ${driver.callSign} -> ${request.id}.`);
-    } finally {
-      setIsResolvingRoute(false);
-    }
-  };
+      if (action === 'accept' && !hasHospitalCapacity(opsState.hospital.beds)) {
+        try {
+          await rejectHospitalCarAccidentAlert(request.sourceAlertId, currentHospitalDecisionId);
+          setDispatchNotice('Capacity unavailable. Alert moved to next nearest hospital.');
+          await refreshCarAccidents(false);
+        } catch (error) {
+          setDispatchNotice(error instanceof Error ? error.message : 'Unable to reject alert for capacity overflow.');
+        }
 
-  const suggestClosestDriverForRequest = (requestId: string) => {
-    const request = opsState.requests.find((r) => r.id === requestId);
+        return;
+      }
+
+      try {
+        if (action === 'accept') {
+          const response = await acceptHospitalCarAccidentAlert(request.sourceAlertId, currentHospitalDecisionId);
+          setDispatchNotice(response.message || `Hospital accepted ${request.id}.`);
+        } else {
+          const response = await rejectHospitalCarAccidentAlert(request.sourceAlertId, currentHospitalDecisionId);
+          setDispatchNotice(response.message || `Hospital rejected ${request.id}.`);
+        }
+
+        await refreshCarAccidents(false);
+      } catch (error) {
+        setDispatchNotice(error instanceof Error ? error.message : 'Unable to submit hospital decision.');
+      }
+    },
+    [currentHospitalDecisionId, opsState.hospital.beds, refreshCarAccidents],
+  );
+
+  const handleMapSelectRequest = useCallback((requestId: string) => {
+    setSelectedRequestId(requestId);
+    setRequestFilter('all');
+    setDispatchNotice(`Selected ${requestId} from map.`);
+  }, []);
+
+  const handleMapAcceptRequest = useCallback((requestId: string) => {
+    const request = openRequestById.get(requestId);
     if (!request) {
-      setDispatchNotice('Request no longer available.');
+      setDispatchNotice('Request no longer available in this queue.');
       return;
     }
 
-    if (!(request.status === 'new' || request.status === 'triaged')) {
-      setDispatchNotice('Only new or triaged requests can be allocated.');
+    if (!isAwaitingHospitalDecision(request)) {
+      if (isAcceptedByCurrentHospital(request)) {
+        setDispatchNotice(`${request.id} is already accepted by this hospital.`);
+      } else {
+        setDispatchNotice(`${request.id} is not currently awaiting this hospital.`);
+      }
       return;
     }
-
-    if (availableDrivers.length === 0) {
-      setSelectedRequestId(requestId);
-      setSelectedDriverId(null);
-      setClosestSuggestion(null);
-      setDispatchNotice('No available drivers currently.');
-      return;
-    }
-
-    const nearest = availableDrivers.reduce((best, current) => {
-      const bestDistance = routeDistanceKm(buildRoadRoute(best.location, request.location));
-      const currentDistance = routeDistanceKm(buildRoadRoute(current.location, request.location));
-      return currentDistance < bestDistance ? current : best;
-    }, availableDrivers[0]);
-
-    const chosenDriver = loggedInAvailableDriver ?? nearest;
-
-    const chosenRoute = buildRoadRoute(chosenDriver.location, request.location);
-    const chosenDistanceKm = routeDistanceKm(chosenRoute);
-    const chosenEta = Math.max(1, Math.round((chosenDistanceKm / Math.max(chosenDriver.speedKmph, 24)) * 60));
-
-    const isLoggedInPrioritized = Boolean(loggedInAvailableDriver && loggedInAvailableDriver.id === chosenDriver.id);
 
     setSelectedRequestId(requestId);
-    setSelectedDriverId(chosenDriver.id);
-    setClosestSuggestion({
-      requestId,
-      driverId: chosenDriver.id,
-      driverCallSign: chosenDriver.callSign,
-      driverName: chosenDriver.name,
-      distanceKm: chosenDistanceKm,
-      etaMinutes: chosenEta,
-    });
+    void handleHospitalAlertDecision(request, 'accept');
+  }, [handleHospitalAlertDecision, isAcceptedByCurrentHospital, isAwaitingHospitalDecision, openRequestById]);
 
-    if (isLoggedInPrioritized) {
-      setDispatchNotice(
-        `Logged-in nearby driver selected: ${chosenDriver.callSign} (${chosenDistanceKm.toFixed(1)} km).`,
-      );
+  const handleMapRejectRequest = useCallback((requestId: string) => {
+    const request = openRequestById.get(requestId);
+    if (!request) {
+      setDispatchNotice('Request no longer available in this queue.');
       return;
     }
 
-    setDispatchNotice(`Closest driver selected: ${chosenDriver.callSign} (${chosenDistanceKm.toFixed(1)} km).`);
-  };
+    if (!isAwaitingHospitalDecision(request)) {
+      if (isAcceptedByCurrentHospital(request)) {
+        setDispatchNotice(`${request.id} is already accepted by this hospital.`);
+      } else {
+        setDispatchNotice(`${request.id} is not currently awaiting this hospital.`);
+      }
+      return;
+    }
 
-  const handleAutoDispatchNearest = (requestId: string) => {
-    suggestClosestDriverForRequest(requestId);
-  };
+    setSelectedRequestId(requestId);
+    void handleHospitalAlertDecision(request, 'reject');
+  }, [handleHospitalAlertDecision, isAcceptedByCurrentHospital, isAwaitingHospitalDecision, openRequestById]);
 
-  const handleDispatchSelected = () => {
-    if (!selectedRequestId || !selectedDriverId) { setDispatchNotice('Select one request and one driver first.'); return; }
-    void dispatchWithDriver(selectedRequestId, selectedDriverId, 'manual');
-  };
+  const handleClearExistingRequests = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      const nowIso = new Date().toISOString();
+      window.localStorage.setItem(alertBaselineStorageKey(activeHospitalRef.id), nowIso);
+      setAlertsBaselineIso(nowIso);
+    }
+
+    setCarAccidents([]);
+    setOpsState((previousState) => ({
+      ...previousState,
+      requests: [],
+      pendingDispatchOffers: [],
+    }));
+    setSelectedRequestId(null);
+    setDispatchNotice('Cleared all existing requests. Only new alerts will appear now.');
+  }, [activeHospitalRef.id]);
 
   const handleBedAdjustment = (field: keyof HospitalBedState, delta: number, label: string) => {
     setOpsState((prev) => {
@@ -853,6 +1231,9 @@ export function HospitalDashboard() {
                 {section.key === 'queue' && criticalCases > 0 && (
                   <span className="hospital-sidebar-item-pulse" />
                 )}
+                {section.key === 'carAccidents' && newCarAccidentsCount > 0 && (
+                  <span className="hospital-sidebar-item-pulse" />
+                )}
               </span>
               <span className="hospital-sidebar-label">{section.label}</span>
             </button>
@@ -928,8 +1309,7 @@ export function HospitalDashboard() {
                 <span className="meta-pill">Last tick {formatDate(opsState.lastSimulationAt)}</span>
               </div>
               <div className="hospital-head-buttons">
-                <button type="button" className="btn btn-secondary" onClick={handleSimulateIncoming}>+ Simulate Request</button>
-                <button type="button" className="btn btn-ghost" onClick={handleResetDemo}>Reset Demo</button>
+                <span className="meta-pill">Auto workflow active: WhatsApp alert to hospital claim to driver dispatch</span>
               </div>
             </div>
           </header>
@@ -938,6 +1318,15 @@ export function HospitalDashboard() {
           <div className="alert-stack">
             {bedPressure >= 0.9 && (
               <AlertBanner tone="danger" title="Bed occupancy critical" message="Capacity crossed 90%. Consider releasing beds or rerouting intake." actionLabel="Release 1 Bed" onAction={() => handleBedAdjustment('occupiedBeds', -1, 'Occupied beds')} />
+            )}
+            {newCarAccidentsCount > 0 && (
+              <AlertBanner
+                tone="danger"
+                title={`${newCarAccidentsCount} new car accident alert${newCarAccidentsCount > 1 ? 's' : ''}`}
+                message="Airbag-triggered crash reports are waiting in Car Accidents."
+                actionLabel="Open Car Accidents"
+                onAction={() => handleSectionChange('carAccidents')}
+              />
             )}
             {criticalCases > 0 && (
               <AlertBanner tone="warning" title={`${criticalCases} critical case${criticalCases > 1 ? 's' : ''} in queue`} message="Prioritize triage and dispatch for high-acuity patients." />
@@ -1090,7 +1479,7 @@ export function HospitalDashboard() {
           {activeSection === 'queue' && (
             <section className="hospital-queue-layout">
               <section className="hospital-panel request-panel">
-                <div className="panel-head"><h2>Patient Queue</h2><p>Receive, triage, and dispatch.</p></div>
+                <div className="panel-head"><h2>Patient Queue</h2><p>Live WhatsApp crash requests routed by nearest-hospital logic.</p></div>
                 <div className="request-filters" role="tablist" aria-label="Request filters" ref={requestFilterRef}>
                   <span
                     className="request-filters-indicator"
@@ -1107,40 +1496,65 @@ export function HospitalDashboard() {
                     </button>
                   ))}
                 </div>
-                <div className="request-list">
+                <div className="request-list" ref={requestListRef}>
                   {filteredRequests.length === 0 ? (
                     <p className="empty-state">No requests for this filter.</p>
                   ) : (
-                    filteredRequests.map((request) => (
-                      <article
-                        key={request.id}
-                        className={`request-card${selectedRequestId === request.id ? ' selected' : ''}`}
-                        onClick={() => setSelectedRequestId(request.id)}
-                      >
-                        <div className="request-card-head">
-                          <div><h3>{request.id}</h3><p>{request.patientName}, {request.age} yrs</p></div>
-                          <div className="request-card-badges">
-                            <StatusBadge label={request.severity} tone={severityTone[request.severity]} />
-                            <StatusBadge label={requestStatusLabel[request.status]} tone={requestStatusTone[request.status]} />
+                    filteredRequests.map((request) => {
+                      const awaitingDecision = isAwaitingHospitalDecision(request);
+                      const acceptedByCurrentHospital = isAcceptedByCurrentHospital(request);
+
+                      return (
+                        <article
+                          key={request.id}
+                          data-request-id={request.id}
+                          className={`request-card${selectedRequestId === request.id ? ' selected' : ''}`}
+                          onClick={() => setSelectedRequestId(request.id)}
+                        >
+                          <div className="request-card-head">
+                            <div><h3>{request.id}</h3><p>{request.patientName}, {request.age} yrs</p></div>
+                            <div className="request-card-badges">
+                              <StatusBadge label={request.severity} tone={severityTone[request.severity]} />
+                              <StatusBadge label={requestStatusLabel[request.status]} tone={requestStatusTone[request.status]} />
+                            </div>
                           </div>
-                        </div>
-                        <p className="request-symptom">{request.symptom}</p>
-                        <dl className="request-meta">
-                          <div><dt>Address</dt><dd>{request.address}</dd></div>
-                          <div><dt>Channel</dt><dd>{request.channel}</dd></div>
-                          <div><dt>Reported</dt><dd>{formatDate(request.reportedAt)}</dd></div>
-                        </dl>
-                        <div className="request-actions" onClick={(e) => e.stopPropagation()}>
-                          {request.status === 'new' && (
-                            <button type="button" className="btn btn-secondary" onClick={() => handleTriageRequest(request.id)}>Triage</button>
-                          )}
-                          {(request.status === 'new' || request.status === 'triaged') && availableDrivers.length > 0 && (
-                            <button type="button" className="btn btn-primary" onClick={() => handleAutoDispatchNearest(request.id)}>Auto Select Closest</button>
-                          )}
-                          <button type="button" className="btn btn-ghost" onClick={() => setSelectedRequestId(request.id)}>Track</button>
-                        </div>
-                      </article>
-                    ))
+                          <p className="request-symptom">{request.symptom}</p>
+                          <dl className="request-meta">
+                            <div><dt>Address</dt><dd>{request.address}</dd></div>
+                            <div><dt>Channel</dt><dd>{request.channel}</dd></div>
+                            <div><dt>Reported</dt><dd>{formatDate(request.reportedAt)}</dd></div>
+                          </dl>
+                          <div className="request-actions" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              disabled={!awaitingDecision}
+                              onClick={() => {
+                                void handleHospitalAlertDecision(request, 'accept');
+                              }}
+                            >
+                              Accept Case
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              disabled={!awaitingDecision}
+                              onClick={() => {
+                                void handleHospitalAlertDecision(request, 'reject');
+                              }}
+                            >
+                              Reject Case
+                            </button>
+                            {acceptedByCurrentHospital ? (
+                              <button type="button" className="btn btn-ghost" disabled>
+                                Accepted by This Hospital
+                              </button>
+                            ) : null}
+                            <button type="button" className="btn btn-ghost" onClick={() => handleMapSelectRequest(request.id)}>Track</button>
+                          </div>
+                        </article>
+                      );
+                    })
                   )}
                 </div>
               </section>
@@ -1151,49 +1565,33 @@ export function HospitalDashboard() {
                   <MapView
                     hospital={opsState.hospital}
                     drivers={linkedDrivers}
-                    requests={opsState.requests}
+                    requests={openRequests}
                     selectedDriverId={selectedDriverId}
                     selectedRequestId={selectedRequestId}
                     onSelectDriver={setSelectedDriverId}
-                    onSelectRequest={setSelectedRequestId}
-                    onSuggestClosestDriver={handleAutoDispatchNearest}
-                    suggestedDriversByRequest={
-                      closestSuggestion
-                        ? { [closestSuggestion.requestId]: `${closestSuggestion.driverCallSign} (${closestSuggestion.distanceKm.toFixed(1)} km, ${closestSuggestion.etaMinutes} min)` }
-                        : undefined
-                    }
+                    onSelectRequest={handleMapSelectRequest}
+                    onAcceptRequest={handleMapAcceptRequest}
+                    onRejectRequest={handleMapRejectRequest}
                   />
                 </div>
                 <section className="dispatch-console" aria-label="Dispatch console">
-                  <h3>Dispatch Console</h3>
-                  <div className="dispatch-fields">
-                    <label>
-                      Request
-                      <select value={selectedRequestId ?? ''} onChange={(e) => setSelectedRequestId(e.target.value || null)}>
-                        <option value="">Select request...</option>
-                        {dispatchableRequests.map((r) => (
-                          <option key={r.id} value={r.id}>{r.id} - {r.severity.toUpperCase()} - {r.address}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Driver
-                      <select value={selectedDriverId ?? ''} onChange={(e) => setSelectedDriverId(e.target.value || null)}>
-                        <option value="">Select driver...</option>
-                        {availableDrivers.map((d) => (
-                          <option key={d.id} value={d.id}>{d.callSign} - {d.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  {closestSuggestion && selectedRequestId === closestSuggestion.requestId && (
-                    <p className="closest-driver-note">
-                      Closest driver selected: <strong>{closestSuggestion.driverCallSign}</strong> ({closestSuggestion.driverName}) -{' '}
-                      {closestSuggestion.distanceKm.toFixed(1)} km - ETA {closestSuggestion.etaMinutes} min. Press <strong>Dispatch Selected Pair</strong> to proceed.
+                  <h3>Automated Dispatch Console</h3>
+                  <p>
+                    The backend sends alerts to the nearest 5 free drivers and nearest hospitals automatically.
+                    When one driver or hospital accepts, the case disappears for the remaining candidates.
+                  </p>
+                  <p>
+                    Current hospital decisions pending: <strong>{dispatchableRequests.length}</strong>.
+                  </p>
+                  {selectedQueueRequest ? (
+                    <p>
+                      Selected from map/list: <strong>{selectedQueueRequest.id}</strong> ({selectedQueueRequest.severity.toUpperCase()})
                     </p>
+                  ) : (
+                    <p>Select a patient directly on the map to focus that request.</p>
                   )}
-                  <button type="button" className="btn btn-primary" onClick={handleDispatchSelected} disabled={!selectedRequest || !selectedDriver || isResolvingRoute}>
-                    {isResolvingRoute ? 'Preparing Road Route...' : 'Dispatch Selected Pair'}
+                  <button type="button" className="btn btn-secondary" onClick={handleClearExistingRequests}>
+                    Clear Existing Requests
                   </button>
                 </section>
               </section>
@@ -1248,11 +1646,6 @@ export function HospitalDashboard() {
                       </dl>
                       <div className="driver-actions">
                         <button type="button" className="btn btn-ghost" onClick={() => setSelectedDriverId(driver.id)}>Focus</button>
-                        {selectedRequest && driver.status === 'available' && !driver.occupied && (
-                          <button type="button" className="btn btn-secondary" onClick={() => { void dispatchWithDriver(selectedRequest.id, driver.id, 'manual'); }} disabled={isResolvingRoute}>
-                            Dispatch Here
-                          </button>
-                        )}
                       </div>
                     </article>
                   ))}
@@ -1318,6 +1711,79 @@ export function HospitalDashboard() {
                   )}
                 </div>
               </section>
+            </section>
+          )}
+
+          {activeSection === 'carAccidents' && (
+            <section className="hospital-panel car-accident-feed-panel">
+              <div className="panel-head">
+                <h2>Car Accident Alerts</h2>
+                <p>
+                  Live alerts from the car site API. Showing car, person, and location details.{' '}
+                  {activeCarAccidents.length} active.
+                </p>
+              </div>
+
+              {isCarAccidentsLoading ? (
+                <p className="empty-state">Loading alerts...</p>
+              ) : null}
+
+              {!isCarAccidentsLoading && carAccidentsError ? (
+                <p className="empty-state">{carAccidentsError}</p>
+              ) : null}
+
+              {!isCarAccidentsLoading && !carAccidentsError && carAccidents.length === 0 ? (
+                <p className="empty-state">No car accident alerts found yet.</p>
+              ) : null}
+
+              {!isCarAccidentsLoading && !carAccidentsError && carAccidents.length > 0 ? (
+                <div className="car-accident-list">
+                  {carAccidents.map((alert) => {
+                    const linkedRequest = requestByAlertId.get(alert.id) ?? toLiveRequest(alert);
+                    const awaitingDecision = isAwaitingHospitalDecision(linkedRequest);
+                    const acceptedByCurrentHospital = isAcceptedByCurrentHospital(linkedRequest);
+
+                    return (
+                      <article className={`car-accident-card status-${alert.status}`} key={alert.id}>
+                        <div className="car-accident-head">
+                          <div>
+                            <h3>{alert.carName} {alert.carModel}</h3>
+                            <p>{alert.id} - {formatCarAlertDateTime(alert.createdAt)}</p>
+                          </div>
+                          <div className="car-accident-badges">
+                            <StatusBadge label={alert.severity.toUpperCase()} tone={severityTone[alert.severity]} />
+                          </div>
+                        </div>
+
+                        <dl className="car-accident-meta">
+                          <div><dt>Person</dt><dd>{alert.personName}</dd></div>
+                          <div><dt>Phone</dt><dd>{alert.personPhone}</dd></div>
+                          <div><dt>Location</dt><dd>{alert.lat.toFixed(5)}, {alert.lng.toFixed(5)}</dd></div>
+                          <div><dt>Drivers Notified</dt><dd>{alert.notifiedDriverIds.length}</dd></div>
+                        </dl>
+
+                        <div className="request-actions">
+                          <button type="button" className="btn btn-primary" disabled={!awaitingDecision} onClick={() => {
+                            void handleHospitalAlertDecision(linkedRequest, 'accept');
+                          }}>
+                            Accept Request
+                          </button>
+                          <button type="button" className="btn btn-secondary" disabled={!awaitingDecision} onClick={() => {
+                            void handleHospitalAlertDecision(linkedRequest, 'reject');
+                          }}>
+                            Reject Request
+                          </button>
+                          {acceptedByCurrentHospital ? (
+                            <button type="button" className="btn btn-ghost" disabled>
+                              Accepted by This Hospital
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : null}
             </section>
           )}
 

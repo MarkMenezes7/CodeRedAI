@@ -1,5 +1,5 @@
 // MyMissions.tsx
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowUpDown,
@@ -24,9 +24,23 @@ import {
 import { StatusBadge } from '@shared/components/StatusBadge';
 import { DriverLayout } from '@modules/driver/pages/DriverLayout';
 import { useHospitalAuth } from '@shared/providers/AuthContext';
-import { DRIVER_MISSIONS, type DriverMissionRecord } from '../mockDriverData';
+import { fetchDriverMissions, type MissionRecord } from '@shared/utils/driverOpsApi';
 
 import './MyMissions.css';
+
+/* ─── Use MissionRecord from API as DriverMissionRecord ──── */
+type DriverMissionRecord = MissionRecord & {
+  // UI-only fields derived from API data
+  patientId: string;
+  patientAge: number;
+  patientGender: string;
+  chiefComplaint: string;
+  pickupLocation: string;
+  dropHospitalName: string;
+  dropHospitalAddress: string;
+  dispatcherNotes: string;
+  timeline: { label: string; at: string }[];
+};
 
 /* ─── Constants ─────────────────────────────────────────────── */
 const STATUS_OPTIONS = ['All', 'Completed', 'Ongoing', 'Cancelled'] as const;
@@ -473,9 +487,44 @@ export function MyMissions() {
     }
     return null;
   }
+  /* ── Fetch data from API ── */
+  const [allMissions, setAllMissions] = useState<DriverMissionRecord[]>([]);
+  const [isFetching, setIsFetching] = useState(true);
+
+  const loadMissions = useCallback(async () => {
+    if (!driverUser?.email) return;
+    setIsFetching(true);
+    try {
+      const res = await fetchDriverMissions(driverUser.email);
+      if (res.success) {
+        // Transform API MissionRecord to our DriverMissionRecord shape
+        const mapped: DriverMissionRecord[] = res.missions.map((m) => ({
+          ...m,
+          patientId: m.patientPhone || m.missionId.slice(0, 8),
+          patientAge: 0,
+          patientGender: 'Unknown',
+          chiefComplaint: m.emergencyType?.replace('_', ' ') || 'Emergency',
+          pickupLocation: m.patientAddress || 'Location shared via GPS',
+          dropHospitalName: m.assignedHospitalName || 'Nearest Hospital',
+          dropHospitalAddress: '',
+          dispatcherNotes: `Severity: ${m.severity} | Type: ${m.emergencyType}`,
+          timeline: [
+            { label: 'Created', at: m.createdAt },
+            ...(m.completedAt ? [{ label: 'Completed', at: m.completedAt }] : []),
+          ],
+        }));
+        setAllMissions(mapped);
+      }
+    } catch (err) {
+      console.error('Failed to load missions:', err);
+    } finally {
+      setIsFetching(false);
+    }
+  }, [driverUser?.email]);
+
+  useEffect(() => { void loadMissions(); }, [loadMissions]);
 
   /* ── Derived data ── */
-  const allMissions = DRIVER_MISSIONS;
   const completedCount = allMissions.filter((m) => m.status === 'Completed').length;
   const ongoingCount = allMissions.filter((m) => m.status === 'Ongoing').length;
   const cancelledCount = allMissions.filter((m) => m.status === 'Cancelled').length;
@@ -553,8 +602,8 @@ export function MyMissions() {
 
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
-    setTimeout(() => setIsRefreshing(false), 800);
-  }, []);
+    loadMissions().finally(() => setIsRefreshing(false));
+  }, [loadMissions]);
 
   const handleStatusQuickFilter = (status: StatusFilter) => {
     setStatusFilter(status);
@@ -831,7 +880,11 @@ export function MyMissions() {
 
         {/* ── Table / Empty ── */}
         <section className="mm-table-section">
-          {filteredMissions.length === 0 ? (
+          {isFetching ? (
+            <div className="mm-empty-wrap" style={{ textAlign: 'center', padding: '2rem' }}>
+              Loading missions data...
+            </div>
+          ) : filteredMissions.length === 0 ? (
             <div className="mm-empty-wrap">
               <EmptyState
                 icon={ClipboardList}
