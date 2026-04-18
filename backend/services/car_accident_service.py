@@ -79,6 +79,18 @@ def _distance_m(origin_lat: float, origin_lng: float, target_lat: float, target_
     return sqrt(lat_diff_km * lat_diff_km + lng_diff_km * lng_diff_km) * 1000
 
 
+def _authenticated_driver_clauses() -> list[dict[str, Any]]:
+    return [
+        {"is_logged_in": True},
+        {
+            "$and": [
+                {"last_login_at": {"$exists": True}},
+                {"last_login_at": {"$ne": None}},
+            ]
+        },
+    ]
+
+
 def _sorted_docs_by_distance(docs: list[dict[str, Any]], lat: float, lng: float) -> list[dict[str, Any]]:
     def distance_key(doc: dict[str, Any]) -> float:
         doc_lat, doc_lng = _extract_geo_point(doc)
@@ -219,6 +231,8 @@ def _load_notified_drivers(lat: float, lng: float) -> list[dict[str, str | None]
         "call_sign": 1,
         "location": 1,
         "dispatch_status": 1,
+        "is_logged_in": 1,
+        "last_login_at": 1,
         "last_ping_at": 1,
         "updated_at": 1,
     }
@@ -234,6 +248,7 @@ def _load_notified_drivers(lat: float, lng: float) -> list[dict[str, str | None]
             }
         },
         "dispatch_status": {"$in": ["online", "available"]},
+        "$or": _authenticated_driver_clauses(),
     }
 
     selected_docs_by_id: dict[str, dict[str, Any]] = {}
@@ -254,11 +269,8 @@ def _load_notified_drivers(lat: float, lng: float) -> list[dict[str, str | None]
 
     if len(selected_docs_by_id) < MAX_DRIVER_NOTIFICATIONS:
         fallback_query = {
-            "$or": [
-                {"dispatch_status": {"$in": ["online", "available"]}},
-                {"dispatch_status": {"$exists": False}},
-                {"dispatch_status": None},
-            ]
+            "dispatch_status": {"$in": ["online", "available"]},
+            "$or": _authenticated_driver_clauses(),
         }
 
         try:
@@ -282,26 +294,6 @@ def _load_notified_drivers(lat: float, lng: float) -> list[dict[str, str | None]
         )
 
         for doc in sorted_fallback_docs:
-            driver_id = str(doc.get("_id") or "").strip()
-            if not driver_id or driver_id in selected_docs_by_id:
-                continue
-
-            selected_docs_by_id[driver_id] = doc
-            if len(selected_docs_by_id) >= MAX_DRIVER_NOTIFICATIONS:
-                break
-
-    if len(selected_docs_by_id) < MAX_DRIVER_NOTIFICATIONS:
-        try:
-            emergency_fallback_docs = list(
-                get_drivers_collection()
-                .find({}, projection)
-                .sort([("updated_at", -1)])
-                .limit(300)
-            )
-        except PyMongoError:
-            emergency_fallback_docs = []
-
-        for doc in _sorted_docs_by_distance(emergency_fallback_docs, lat, lng):
             driver_id = str(doc.get("_id") or "").strip()
             if not driver_id or driver_id in selected_docs_by_id:
                 continue

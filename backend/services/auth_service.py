@@ -302,6 +302,7 @@ def signup_driver(payload: DriverSignupRequest) -> AuthResult:
         "vehicle_number": vehicle_number,
         "linked_hospital_id": linked_hospital_id,
         "dispatch_status": "available",
+        "is_logged_in": False,
         "location": driver_geojson_location,
         "password_hash": hash_password(payload.password),
         "role": "driver",
@@ -340,7 +341,16 @@ def login_driver(payload: LoginRequest) -> AuthResult:
 
     now = datetime.utcnow()
     try:
-        collection.update_one({"_id": doc["_id"]}, {"$set": {"last_login_at": now}})
+        login_update = {
+            "last_login_at": now,
+            "is_logged_in": True,
+            "updated_at": now,
+        }
+        if doc.get("dispatch_status") not in {"assigned", "on_mission"}:
+            login_update["dispatch_status"] = "online"
+
+        collection.update_one({"_id": doc["_id"]}, {"$set": login_update})
+        doc.update(login_update)
     except PyMongoError:
         # Non-critical side effect; authentication already validated.
         pass
