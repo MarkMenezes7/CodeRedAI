@@ -73,10 +73,21 @@ export interface MissionStatusUpdate {
   lng?: number;
 }
 
+export interface RecommendedHospital {
+  hospital_id: string;
+  name: string;
+  address: string;
+  available_beds?: number;
+  lat?: number;
+  lng?: number;
+  distance_m?: number;
+}
+
 export interface MissionUpdateResponse {
   success: boolean;
   message: string;
   new_status: string;
+  recommended_hospital?: RecommendedHospital;
 }
 
 export interface LocationUpdateResponse {

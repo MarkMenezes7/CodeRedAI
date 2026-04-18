@@ -30,6 +30,7 @@ try:
         LocationUpdateResponse,
         MissionStatusUpdate,
         MissionUpdateResponse,
+        RecommendedHospital,
     )
     from ..services.driver_service import (
         accept_driver_offer,
@@ -57,6 +58,7 @@ except ImportError:
         LocationUpdateResponse,
         MissionStatusUpdate,
         MissionUpdateResponse,
+        RecommendedHospital,
     )
     from services.driver_service import (
         accept_driver_offer,
@@ -307,6 +309,9 @@ async def driver_mission_update_endpoint(payload: MissionStatusUpdate):
     """
     Transition the emergency through its lifecycle:
         DRIVER_ASSIGNED → EN_ROUTE_PATIENT → PATIENT_PICKED → EN_ROUTE_HOSPITAL → COMPLETED
+
+    When transitioning to PATIENT_PICKED, the backend automatically discovers
+    the nearest hospital with available beds and returns it for driver navigation.
     """
     result = update_mission_status(
         driver_id=payload.driver_id,
@@ -322,10 +327,25 @@ async def driver_mission_update_endpoint(payload: MissionStatusUpdate):
             detail=result["message"],
         )
 
+    # Build recommended hospital object if the service returned one
+    rec_hospital = None
+    rec_data = result.get("recommended_hospital")
+    if rec_data and isinstance(rec_data, dict):
+        rec_hospital = RecommendedHospital(
+            hospital_id=rec_data.get("hospital_id", ""),
+            name=rec_data.get("name", "Unknown Hospital"),
+            address=rec_data.get("address", ""),
+            available_beds=rec_data.get("available_beds"),
+            lat=rec_data.get("lat"),
+            lng=rec_data.get("lng"),
+            distance_m=rec_data.get("distance_m"),
+        )
+
     return MissionUpdateResponse(
         success=True,
         message=result["message"],
         new_status=payload.status,
+        recommended_hospital=rec_hospital,
     )
 
 

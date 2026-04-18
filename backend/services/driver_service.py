@@ -695,6 +695,148 @@ def get_active_mission(driver_id: str) -> dict[str, Any] | None:
     return mission
 
 
+def _resolve_hospital_details(hospital_id: str) -> dict[str, Any] | None:
+    """Fetch hospital name + GeoJSON coordinates for a hospital_id."""
+    try:
+        try:
+            from ..database import get_hospitals_collection
+        except ImportError:
+            from database import get_hospitals_collection
+
+        hospital = get_hospitals_collection().find_one({"hospital_id": hospital_id})
+        if not hospital:
+            return None
+
+        details: dict[str, Any] = {
+            "hospital_id": hospital_id,
+            "name": hospital.get("name", "Unknown Hospital"),
+            "address": hospital.get("address", ""),
+            "available_beds": hospital.get("available_beds", hospital.get("bed_capacity", 0)),
+        }
+
+        h_loc = hospital.get("location", {})
+        if isinstance(h_loc, dict) and h_loc.get("type") == "Point":
+            coords = h_loc.get("coordinates", [])
+            if len(coords) >= 2:
+                details["lng"] = coords[0]
+                details["lat"] = coords[1]
+
+        return details
+    except Exception as exc:
+        _logger.warning("[HOSPITAL DETAILS] lookup failed for %s: %s", hospital_id, exc)
+        return None
+
+
+def _auto_assign_nearest_hospital(
+    emergency_id: str,
+    driver_lat: float,
+    driver_lng: float,
+) -> dict[str, Any] | None:
+    """
+    Automatically find the nearest hospital with available beds, assign it
+    to the emergency, and return full hospital details for the driver.
+
+    Called when the driver transitions to PATIENT_PICKED so they get
+    immediate routing to the best available hospital.
+
+    Returns a hospital details dict on success, or None if no hospital found.
+    """
+    try:
+        try:
+            from ..services.hospital_service import find_nearest_hospitals
+        except ImportError:
+            from services.hospital_service import find_nearest_hospitals
+    except Exception:
+        _logger.error("[AUTO HOSPITAL] Could not import hospital_service")
+        return None
+
+    # Search within 5 km first, expand to 10 km, then 20 km
+    for radius in (_DEFAULT_RADIUS_M, _FALLBACK_RADIUS_M, _EXTENDED_RADIUS_M):
+        hospitals = find_nearest_hospitals(driver_lat, driver_lng, radius_m=radius, limit=5)
+        if hospitals:
+            break
+    else:
+        _logger.warning(
+            "[AUTO HOSPITAL] No hospitals found within %dm for emergency=%s",
+            _EXTENDED_RADIUS_M, emergency_id,
+        )
+        return None
+
+    # Pick the nearest hospital that has available beds
+    chosen = None
+    for h in hospitals:
+        beds = h.get("available_beds", 0)
+        if beds > 0:
+            chosen = h
+            break
+
+    # Fallback: pick nearest even if beds unknown
+    if not chosen:
+        chosen = hospitals[0]
+
+    hospital_id = chosen["hospital_id"]
+    now = datetime.now(tz=timezone.utc)
+
+    # Atomically assign — only if no hospital is already assigned
+    try:
+        assign_result = get_emergencies_collection().update_one(
+            {
+                "_id": _oid(emergency_id),
+                "$or": [
+                    {"assigned_hospital": None},
+                    {"assigned_hospital": {"$exists": False}},
+                ],
+            },
+            {
+                "$set": {
+                    "assigned_hospital": hospital_id,
+                    "hospital_status": "auto_assigned",
+                    "updated_at": now,
+                },
+                "$addToSet": {
+                    "notified_hospitals": hospital_id,
+                },
+            },
+        )
+
+        if assign_result.modified_count == 0:
+            # Hospital already assigned by earlier flow — fetch that one instead
+            doc = get_emergencies_collection().find_one({"_id": _oid(emergency_id)})
+            existing_id = doc.get("assigned_hospital") if doc else None
+            if existing_id:
+                _logger.info(
+                    "[AUTO HOSPITAL] Hospital already assigned (%s) for emergency=%s",
+                    existing_id, emergency_id,
+                )
+                return _resolve_hospital_details(existing_id)
+            return None
+    except PyMongoError as exc:
+        _logger.error("[AUTO HOSPITAL DB ERROR] %s", exc)
+        return None
+
+    _logger.info(
+        "[AUTO HOSPITAL] Assigned %s (%s) to emergency=%s | beds=%s | dist=%sm",
+        chosen["name"], hospital_id, emergency_id,
+        chosen.get("available_beds"), chosen.get("distance_m"),
+    )
+
+    # Return full details for the driver's navigation
+    details = _resolve_hospital_details(hospital_id)
+    if details:
+        details["distance_m"] = chosen.get("distance_m")
+    else:
+        # Fallback to search result data if DB lookup returns nothing extra
+        details = {
+            "hospital_id": hospital_id,
+            "name": chosen.get("name", "Unknown Hospital"),
+            "address": chosen.get("address", ""),
+            "available_beds": chosen.get("available_beds", 0),
+            "distance_m": chosen.get("distance_m"),
+        }
+
+    return details
+
+
 def update_mission_status(
     driver_id: str,
     emergency_id: str,
@@ -710,6 +852,11 @@ def update_mission_status(
         EN_ROUTE_PATIENT → PATIENT_PICKED
         PATIENT_PICKED → EN_ROUTE_HOSPITAL
         EN_ROUTE_HOSPITAL → COMPLETED
+
+    When transitioning to PATIENT_PICKED, the system automatically:
+        1. Finds the nearest hospital with available beds
+        2. Assigns it to the emergency
+        3. Returns hospital details (name, lat, lng) for driver navigation
     """
     valid_transitions = {
         "EN_ROUTE_PATIENT": ["DRIVER_ASSIGNED"],
@@ -751,7 +898,37 @@ def update_mission_status(
             "message": f"Cannot transition to {new_status}. Current status may not allow this transition.",
         }
 
-    # If completed, free the driver
+    # ── PATIENT_PICKED: auto-discover and assign nearest hospital ──────
+    recommended_hospital: dict[str, Any] | None = None
+    if new_status == "PATIENT_PICKED" and lat is not None and lng is not None:
+        recommended_hospital = _auto_assign_nearest_hospital(
+            emergency_id=emergency_id,
+            driver_lat=lat,
+            driver_lng=lng,
+        )
+        if recommended_hospital:
+            _logger.info(
+                "[MISSION UPDATE] Auto-assigned hospital %s for emergency=%s",
+                recommended_hospital.get("name"), emergency_id,
+            )
+    elif new_status == "PATIENT_PICKED":
+        # No GPS — try using the patient's location from the emergency doc
+        try:
+            doc = get_emergencies_collection().find_one({"_id": _oid(emergency_id)})
+            if doc:
+                eloc = doc.get("location", {})
+                plat = eloc.get("lat")
+                plng = eloc.get("lng")
+                if plat is not None and plng is not None:
+                    recommended_hospital = _auto_assign_nearest_hospital(
+                        emergency_id=emergency_id,
+                        driver_lat=plat,
+                        driver_lng=plng,
+                    )
+        except Exception:
+            pass
+
+    # ── COMPLETED: free the driver ────────────────────────────────────
     if new_status == "COMPLETED":
         try:
             get_drivers_collection().update_one(
@@ -771,7 +948,21 @@ def update_mission_status(
         "[MISSION UPDATE] driver=%s emergency=%s → %s",
         driver_id, emergency_id, new_status,
     )
-    return {"success": True, "message": f"Status updated to {new_status}."}
+
+    response: dict[str, Any] = {
+        "success": True,
+        "message": f"Status updated to {new_status}.",
+    }
+
+    if recommended_hospital:
+        response["recommended_hospital"] = recommended_hospital
+        response["message"] = (
+            f"Status updated to {new_status}. "
+            f"Recommended hospital: {recommended_hospital.get('name', 'Unknown')} "
+            f"({recommended_hospital.get('available_beds', '?')} beds available)"
+        )
+
+    return response
 
 
 # ---------------------------------------------------------------------------
