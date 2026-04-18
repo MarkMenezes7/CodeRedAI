@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from bson import ObjectId
 from fastapi import HTTPException, status
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
@@ -48,6 +49,31 @@ def _raise_db_unavailable(exc: Exception) -> None:
 
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _to_iso_datetime(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _hospital_lookup_query(hospital_identifier: str) -> Dict[str, Any]:
+    normalized = str(hospital_identifier or "").strip()
+    if not normalized:
+        return {}
+
+    clauses: list[Dict[str, Any]] = [
+        {"hospital_id": normalized.upper()},
+        {"email": _normalize_email(normalized)},
+        {"name": normalized},
+    ]
+
+    if ObjectId.is_valid(normalized):
+        clauses.append({"_id": ObjectId(normalized)})
+
+    return {"$or": clauses}
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -241,6 +267,112 @@ def login_hospital(payload: LoginRequest) -> AuthResult:
     return AuthResult(user=user, token=token)
 
 
+def get_hospital_profile(hospital_id: str) -> Optional[Dict[str, Any]]:
+    lookup_query = _hospital_lookup_query(hospital_id)
+    if not lookup_query:
+        return None
+
+    collection = get_hospitals_collection()
+    try:
+        doc = collection.find_one(lookup_query)
+    except PyMongoError as exc:
+        _raise_db_unavailable(exc)
+
+    if not doc:
+        return None
+
+    profile = _build_hospital_user(doc)
+    profile["status"] = doc.get("status")
+    profile["createdAt"] = _to_iso_datetime(doc.get("created_at"))
+    profile["updatedAt"] = _to_iso_datetime(doc.get("updated_at"))
+    return profile
+
+
+def update_hospital_profile(
+    hospital_id: str,
+    name: Optional[str] = None,
+    email: Optional[str] = None,
+    address: Optional[str] = None,
+    bed_capacity: Optional[int] = None,
+    location: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    lookup_query = _hospital_lookup_query(hospital_id)
+    if not lookup_query:
+        return {"success": False, "message": "hospital_id is required."}
+
+    updates: Dict[str, Any] = {}
+
+    if name is not None:
+        normalized_name = str(name).strip()
+        if not normalized_name:
+            return {"success": False, "message": "Hospital name cannot be empty."}
+        updates["name"] = normalized_name
+
+    if email is not None:
+        normalized_email = _normalize_email(str(email))
+        if not normalized_email:
+            return {"success": False, "message": "Email cannot be empty."}
+        updates["email"] = normalized_email
+
+    if address is not None:
+        updates["address"] = str(address).strip()
+
+    if bed_capacity is not None:
+        try:
+            normalized_beds = int(bed_capacity)
+        except (TypeError, ValueError):
+            return {"success": False, "message": "bed_capacity must be a valid number."}
+
+        if normalized_beds < 1 or normalized_beds > 5000:
+            return {"success": False, "message": "bed_capacity must be between 1 and 5000."}
+
+        updates["bed_capacity"] = normalized_beds
+
+    if location is not None:
+        if not isinstance(location, dict):
+            return {"success": False, "message": "location must be an object with lat and lng."}
+
+        lat = location.get("lat")
+        lng = location.get("lng")
+        if not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
+            return {"success": False, "message": "location.lat and location.lng are required numbers."}
+
+        updates["location"] = {
+            "type": "Point",
+            "coordinates": [float(lng), float(lat)],
+        }
+
+    if not updates:
+        return {"success": False, "message": "No profile changes were provided."}
+
+    updates["updated_at"] = datetime.utcnow()
+
+    collection = get_hospitals_collection()
+    try:
+        result = collection.update_one(lookup_query, {"$set": updates})
+    except DuplicateKeyError:
+        return {"success": False, "message": "Email already registered with another account."}
+    except PyMongoError as exc:
+        _raise_db_unavailable(exc)
+
+    if result.matched_count == 0:
+        return {"success": False, "message": "Hospital not found."}
+
+    try:
+        updated_doc = collection.find_one(lookup_query)
+    except PyMongoError as exc:
+        _raise_db_unavailable(exc)
+
+    if not updated_doc:
+        return {"success": False, "message": "Hospital not found after update."}
+
+    return {
+        "success": True,
+        "message": "Hospital profile updated.",
+        "user": _build_hospital_user(updated_doc),
+    }
+
+
 def signup_driver(payload: DriverSignupRequest) -> AuthResult:
     collection = get_drivers_collection()
     email = _normalize_email(payload.email)
@@ -418,13 +550,58 @@ def login_admin(payload: LoginRequest) -> AuthResult:
 def get_preset_hospitals(limit: int = 10) -> Dict[str, Any]:
     collection = get_hospitals_collection()
     try:
-        docs = list(collection.find({}, {"name": 1, "email": 1}).limit(limit))
+        docs = list(
+            collection.find(
+                {},
+                {
+                    "hospital_id": 1,
+                    "name": 1,
+                    "email": 1,
+                    "bed_capacity": 1,
+                    "address": 1,
+                    "status": 1,
+                    "created_at": 1,
+                    "location": 1,
+                },
+            )
+            .sort("updated_at", -1)
+            .limit(limit)
+        )
     except PyMongoError as exc:
         _raise_db_unavailable(exc)
-    hospitals = [
-        {"id": str(doc["_id"]), "name": doc.get("name", ""), "email": doc.get("email", "")}
-        for doc in docs
-    ]
+
+    hospitals = []
+    for doc in docs:
+        location_out = None
+        raw_location = doc.get("location")
+        if isinstance(raw_location, dict):
+            if raw_location.get("type") == "Point":
+                coordinates = raw_location.get("coordinates") or []
+                if isinstance(coordinates, list) and len(coordinates) >= 2:
+                    location_out = {
+                        "lat": float(coordinates[1]),
+                        "lng": float(coordinates[0]),
+                    }
+            elif {"lat", "lng"}.issubset(raw_location.keys()):
+                location_out = {
+                    "lat": float(raw_location["lat"]),
+                    "lng": float(raw_location["lng"]),
+                }
+
+        hospitals.append(
+            {
+                "id": str(doc["_id"]),
+                "name": doc.get("name", ""),
+                "email": doc.get("email", ""),
+                "hospitalId": doc.get("hospital_id"),
+                "bedCapacity": doc.get("bed_capacity"),
+                "address": doc.get("address"),
+                "status": doc.get("status"),
+                "createdAt": _to_iso_datetime(doc.get("created_at")),
+                "location": location_out,
+            }
+        )
+
     return {"defaultPassword": DEFAULT_PRESET_PASSWORD, "hospitals": hospitals}
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Shield, Eye, Zap, Activity, CheckCircle, ArrowRight } from 'lucide-react';
+import { Shield, Activity, CheckCircle, ArrowRight } from 'lucide-react';
 
 import { readStoredAdminSession } from '@/utils/redirectByRole';
 import './AdminLoginTransitionPage.css';

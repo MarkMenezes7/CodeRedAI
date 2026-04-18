@@ -16,6 +16,7 @@ try:
     )
     from ..services.auth_service import (
         get_preset_drivers,
+        get_hospital_profile,
         get_preset_hospitals,
         login_admin,
         login_driver,
@@ -23,6 +24,7 @@ try:
         signup_admin,
         signup_driver,
         signup_hospital,
+        update_hospital_profile,
     )
     from ..utils.jwt_handler import set_access_cookie
 except ImportError:  # pragma: no cover - compatibility for `uvicorn app.main:app`
@@ -39,6 +41,7 @@ except ImportError:  # pragma: no cover - compatibility for `uvicorn app.main:ap
     )
     from services.auth_service import (
         get_preset_drivers,
+        get_hospital_profile,
         get_preset_hospitals,
         login_admin,
         login_driver,
@@ -46,6 +49,7 @@ except ImportError:  # pragma: no cover - compatibility for `uvicorn app.main:ap
         signup_admin,
         signup_driver,
         signup_hospital,
+        update_hospital_profile,
     )
     from utils.jwt_handler import set_access_cookie
 
@@ -77,8 +81,37 @@ async def hospital_login(payload: LoginRequest, response: Response):
 
 
 @router.get("/hospital/presets", response_model=PresetHospitalResponse)
-async def hospital_presets():
-    return get_preset_hospitals()
+async def hospital_presets(
+    limit: int = Query(default=200, ge=1, le=500, description="Maximum number of hospital presets to return."),
+):
+    return get_preset_hospitals(limit=limit)
+
+
+@router.get("/hospital/profile")
+async def hospital_profile_get(
+    hospital_id: str = Query(..., description="Hospital identifier (hospital_id, email, name, or _id)."),
+):
+    profile = get_hospital_profile(hospital_id)
+    if not profile:
+        return {"success": False, "message": "Hospital not found."}
+    return {"success": True, **profile}
+
+
+@router.put("/hospital/profile")
+async def hospital_profile_update(payload: dict):
+    hospital_id = payload.get("hospital_id")
+    if not hospital_id:
+        return {"success": False, "message": "hospital_id is required."}
+
+    result = update_hospital_profile(
+        hospital_id=hospital_id,
+        name=payload.get("name"),
+        email=payload.get("email"),
+        address=payload.get("address"),
+        bed_capacity=payload.get("bed_capacity", payload.get("bedCapacity")),
+        location=payload.get("location"),
+    )
+    return result
 
 
 @router.post("/driver/signup", response_model=DriverAuthResponse, status_code=status.HTTP_201_CREATED)

@@ -95,6 +95,12 @@ class PresetHospitalAccount(BaseModel):
     id: str
     name: str
     email: str
+    hospitalId: Optional[str] = None
+    bedCapacity: Optional[int] = None
+    address: Optional[str] = None
+    status: Optional[str] = None
+    createdAt: Optional[str] = None
+    location: Optional[GeoPoint] = None
 
 
 class PresetHospitalResponse(BaseModel):

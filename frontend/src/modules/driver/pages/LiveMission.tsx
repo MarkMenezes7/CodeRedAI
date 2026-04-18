@@ -1640,7 +1640,6 @@ export function LiveMission() {
       window.clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
-
     lastFetchRef.current = null;
     setRetryNonce((value) => value + 1);
   }, [mission, setMissionStatus, speak, stopSimulation]);
@@ -2052,7 +2051,12 @@ export function LiveMission() {
             <NavigationControl position="top-right" />
 
             {routeGeoJson ? (
-              <Source id="live-mission-route-source" type="geojson" data={routeGeoJson}>
+              <Source
+                key={routeData?.loadedAt ?? 'initial'}
+                id="live-mission-route-source"
+                type="geojson"
+                data={routeGeoJson}
+              >
                 <Layer {...routeLineLayer} />
               </Source>
             ) : null}

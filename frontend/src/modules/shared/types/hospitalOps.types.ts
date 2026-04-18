@@ -77,6 +77,7 @@ export interface PatientRequest {
   reportedAt: string;
   status: RequestStatus;
   sourceAlertId?: string;
+  sourceEmergencyId?: string;
   assignedDriverId?: string;
   hospitalId?: string;
   destinationHospitalName?: string;

@@ -1,11 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { StatusBadge } from '@shared/components/StatusBadge';
 import { formatDate } from '@shared/utils/formatters';
+import { getLiveHospitalRecords, type PresetHospitalDirectoryRecord } from '@shared/utils/hospitalAuthApi';
 import { AdminSidebar } from '@modules/admin/components/AdminSidebar';
 import './AdminPanel.css';
 
-type VerificationStatus = 'pending' | 'verified' | 'needs_review' | 'rejected';
+type VerificationStatus = 'pending' | 'verified';
 type ReviewStatus = 'open' | 'in_progress' | 'resolved';
 type ReviewSeverity = 'low' | 'medium' | 'high';
 type AdminSectionKey = 'overview' | 'verification' | 'reviews' | 'compliance' | 'ops';
@@ -90,6 +91,7 @@ interface DocumentDefinition {
 
 const STORAGE_KEY = 'codered-admin-auth-v1';
 const LICENSE_PATTERN = /^CEA-[A-Z]{2,5}-\d{4}-\d{3,6}$/;
+const LIVE_HOSPITAL_SYNC_MS = 8_000;
 
 const documentDefinitions: DocumentDefinition[] = [
   {
@@ -286,7 +288,7 @@ const initialHospitals: AdminHospitalRecord[] = [
     name: 'Nanavati Max Super Speciality',
     cityZone: 'Vile Parle West',
     onboardedAt: '2026-04-01T07:42:00.000Z',
-    verificationStatus: 'needs_review',
+    verificationStatus: 'pending',
     licenseNumber: 'INVALID-624',
     bedCount: 0,
     icuCount: 16,
@@ -351,7 +353,7 @@ const initialHospitals: AdminHospitalRecord[] = [
     name: 'Sion Hospital',
     cityZone: 'Sion',
     onboardedAt: '2026-03-30T10:13:00.000Z',
-    verificationStatus: 'rejected',
+    verificationStatus: 'pending',
     licenseNumber: 'CEA-MH-2026-2330',
     bedCount: 240,
     icuCount: 22,
@@ -479,8 +481,6 @@ const initialActivity: AdminActivity[] = [
 const verificationTone: Record<VerificationStatus, 'neutral' | 'info' | 'success' | 'warning' | 'danger'> = {
   pending: 'warning',
   verified: 'success',
-  needs_review: 'info',
-  rejected: 'danger',
 };
 
 const reviewTone: Record<ReviewStatus, 'neutral' | 'info' | 'success'> = {
@@ -515,6 +515,67 @@ const incidentVolumeByRange: Record<OverviewRange, { labels: string[]; values: n
     values: [278, 301, 326, 298],
   },
 };
+
+function resolveLiveHospitalRecordId(record: PresetHospitalDirectoryRecord) {
+  const normalizedHospitalId = record.hospitalId?.trim().toUpperCase();
+  if (normalizedHospitalId) {
+    return normalizedHospitalId;
+  }
+
+  const normalizedName = record.name?.trim().toUpperCase() ?? '';
+  if (normalizedName.startsWith('HSP-')) {
+    return normalizedName;
+  }
+
+  return record.id;
+}
+
+function verificationStatusFromLive(value: string | undefined): VerificationStatus {
+  return (value ?? '').trim().toLowerCase() === 'active' ? 'verified' : 'pending';
+}
+
+function mergeLiveHospitalsIntoState(
+  current: AdminHospitalRecord[],
+  liveRecords: PresetHospitalDirectoryRecord[],
+): AdminHospitalRecord[] {
+  if (liveRecords.length === 0) {
+    return current;
+  }
+
+  const fallbackPool = current.length > 0 ? current : initialHospitals;
+  const currentById = new Map(current.map((hospital) => [hospital.id, hospital]));
+
+  const mappedHospitals = liveRecords.map((record, index) => {
+    const recordId = resolveLiveHospitalRecordId(record);
+    const existing = currentById.get(recordId);
+    const fallback = existing ?? fallbackPool[index % fallbackPool.length] ?? initialHospitals[0];
+
+    const bedCount =
+      typeof record.bedCapacity === 'number' && Number.isFinite(record.bedCapacity)
+        ? Math.max(1, Math.round(record.bedCapacity))
+        : fallback.bedCount;
+
+    const hasLocation =
+      typeof record.location?.lat === 'number' && typeof record.location?.lng === 'number';
+
+    return {
+      ...fallback,
+      id: recordId,
+      name: record.name?.trim() || fallback.name,
+      onboardedAt: record.createdAt || fallback.onboardedAt,
+      verificationStatus: verificationStatusFromLive(record.status),
+      bedCount,
+      icuCount: Math.min(bedCount, Math.max(0, fallback.icuCount)),
+      addressVerified: Boolean(record.address) || fallback.addressVerified,
+      gpsMatched: hasLocation || fallback.gpsMatched,
+    } satisfies AdminHospitalRecord;
+  });
+
+  const mappedIds = new Set(mappedHospitals.map((hospital) => hospital.id));
+  const leftoverHospitals = current.filter((hospital) => !mappedIds.has(hospital.id));
+
+  return [...mappedHospitals, ...leftoverHospitals];
+}
 
 function statusLabelFromKey(value: string) {
   return value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
@@ -713,11 +774,41 @@ export function AdminPanel() {
     [hospitals, selectedHospitalId],
   );
 
+  useEffect(() => {
+    if (!adminAuth) {
+      return;
+    }
+
+    let isDisposed = false;
+
+    const syncLiveHospitals = async () => {
+      try {
+        const liveRecords = await getLiveHospitalRecords(200);
+        if (isDisposed || liveRecords.length === 0) {
+          return;
+        }
+
+        setHospitals((current) => mergeLiveHospitalsIntoState(current, liveRecords));
+      } catch {
+        // Preserve existing view when live sync is temporarily unavailable.
+      }
+    };
+
+    void syncLiveHospitals();
+
+    const intervalId = window.setInterval(() => {
+      void syncLiveHospitals();
+    }, LIVE_HOSPITAL_SYNC_MS);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [adminAuth]);
+
   const metrics = useMemo(() => {
     const verifiedHospitals = hospitals.filter((hospital) => hospital.verificationStatus === 'verified').length;
     const pendingHospitals = hospitals.filter((hospital) => hospital.verificationStatus === 'pending').length;
-    const reviewHospitals = hospitals.filter((hospital) => hospital.verificationStatus === 'needs_review').length;
-    const rejectedHospitals = hospitals.filter((hospital) => hospital.verificationStatus === 'rejected').length;
     const expiringCertificates = hospitals.reduce(
       (sum, hospital) => sum + expiringSoonDocuments(hospital).length,
       0,
@@ -733,8 +824,6 @@ export function AdminPanel() {
     return {
       verifiedHospitals,
       pendingHospitals,
-      reviewHospitals,
-      rejectedHospitals,
       expiringCertificates,
       openReviews,
       highSeverityOpenReviews,
@@ -844,7 +933,7 @@ export function AdminPanel() {
 
     const errors = validateForVerification(candidate);
     if (errors.length > 0) {
-      updateHospital(hospitalId, (hospital) => ({ ...hospital, verificationStatus: 'needs_review' }));
+      updateHospital(hospitalId, (hospital) => ({ ...hospital, verificationStatus: 'pending' }));
       const message = `Verification blocked for ${candidate.name}: ${errors[0]}`;
       setAdminNotice(message);
       addActivity(message, 'verification');
@@ -857,20 +946,12 @@ export function AdminPanel() {
     addActivity(message, 'verification');
   };
 
-  const handleMarkNeedsReview = (hospitalId: string) => {
-    updateHospital(hospitalId, (hospital) => ({ ...hospital, verificationStatus: 'needs_review' }));
+  const handleSetPendingHospital = (hospitalId: string) => {
+    updateHospital(hospitalId, (hospital) => ({ ...hospital, verificationStatus: 'pending' }));
     const hospital = hospitals.find((item) => item.id === hospitalId);
-    const message = `${hospital?.name ?? hospitalId} moved to manual review queue.`;
+    const message = `${hospital?.name ?? hospitalId} moved to pending verification.`;
     setAdminNotice(message);
     addActivity(message, 'verification');
-  };
-
-  const handleRejectHospital = (hospitalId: string) => {
-    updateHospital(hospitalId, (hospital) => ({ ...hospital, verificationStatus: 'rejected' }));
-    const hospital = hospitals.find((item) => item.id === hospitalId);
-    const message = `${hospital?.name ?? hospitalId} has been rejected from active network routing.`;
-    setAdminNotice(message);
-    addActivity(message, 'compliance');
   };
 
   const handleReviewStatus = (reviewId: string, status: ReviewStatus) => {
@@ -1028,7 +1109,7 @@ export function AdminPanel() {
         <article className="admin-kpi-card">
           <p>Verified Hospitals</p>
           <strong>{metrics.verifiedHospitals}</strong>
-          <span>{metrics.pendingHospitals + metrics.reviewHospitals} in queue</span>
+          <span>{metrics.pendingHospitals} in queue</span>
         </article>
         <article className="admin-kpi-card">
           <p>Open Review Tickets</p>
@@ -1049,12 +1130,12 @@ export function AdminPanel() {
 
       <div className="admin-overview-strip">
         <article>
-          <p>Needs Review</p>
-          <strong>{metrics.reviewHospitals}</strong>
+          <p>Pending Verification</p>
+          <strong>{metrics.pendingHospitals}</strong>
         </article>
         <article>
-          <p>Rejected / Delisted</p>
-          <strong>{metrics.rejectedHospitals}</strong>
+          <p>Expiring Certificates</p>
+          <strong>{metrics.expiringCertificates}</strong>
         </article>
         <article>
           <p>Last Admin Login</p>
@@ -1209,20 +1290,10 @@ export function AdminPanel() {
                           className="admin-btn"
                           onClick={(event) => {
                             event.stopPropagation();
-                            handleMarkNeedsReview(hospital.id);
+                            handleSetPendingHospital(hospital.id);
                           }}
                         >
-                          Review
-                        </button>
-                        <button
-                          type="button"
-                          className="admin-btn admin-btn-danger"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleRejectHospital(hospital.id);
-                          }}
-                        >
-                          Reject
+                          Set Pending
                         </button>
                       </div>
                     </td>
@@ -1408,11 +1479,8 @@ export function AdminPanel() {
                 <button className="admin-btn admin-btn-primary" onClick={() => handleVerifyHospital(selectedHospital.id)}>
                   Verify Selected
                 </button>
-                <button className="admin-btn" onClick={() => handleMarkNeedsReview(selectedHospital.id)}>
-                  Mark Review
-                </button>
-                <button className="admin-btn admin-btn-danger" onClick={() => handleRejectHospital(selectedHospital.id)}>
-                  Reject
+                <button className="admin-btn" onClick={() => handleSetPendingHospital(selectedHospital.id)}>
+                  Set Pending
                 </button>
               </div>
             </>
@@ -1543,8 +1611,8 @@ export function AdminPanel() {
                     label={statusLabelFromKey(hospital.verificationStatus)}
                     tone={verificationTone[hospital.verificationStatus]}
                   />
-                  <button className="admin-btn admin-btn-danger" onClick={() => handleRejectHospital(hospital.id)}>
-                    Reject / Delist
+                  <button className="admin-btn" onClick={() => handleSetPendingHospital(hospital.id)}>
+                    Set Pending
                   </button>
                 </div>
 
@@ -1606,7 +1674,7 @@ export function AdminPanel() {
           activeSection={activeSection}
           onSelectSection={setActiveSection}
           counts={{
-            verification: metrics.pendingHospitals + metrics.reviewHospitals,
+            verification: metrics.pendingHospitals,
             reviews: metrics.openReviews,
             compliance: flaggedHospitals.length,
           }}

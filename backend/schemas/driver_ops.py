@@ -121,10 +121,21 @@ class LocationUpdateResponse(BaseModel):
     message: str
 
 
+class RecommendedHospital(BaseModel):
+    hospital_id: str
+    name: str
+    address: str = ""
+    available_beds: Optional[int] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    distance_m: Optional[float] = None
+
+
 class MissionUpdateResponse(BaseModel):
     success: bool
     message: str
     new_status: str
+    recommended_hospital: Optional[RecommendedHospital] = None
 
 
 class EmergencyStatusResponse(BaseModel):

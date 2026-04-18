@@ -9,7 +9,14 @@ import {
   fetchDriverOffers,
   rejectDriverOffer as apiRejectDriverOffer,
   updateMissionStatus as apiUpdateMissionStatus,
+  type RecommendedHospital,
 } from '../modules/shared/utils/driverOpsApi';
+
+export interface UpdateStatusResult {
+  success: boolean;
+  message: string;
+  recommended_hospital?: RecommendedHospital;
+}
 
 export interface UseDriverDispatchResult {
   pendingOffers: DriverOfferItem[];
@@ -20,7 +27,7 @@ export interface UseDriverDispatchResult {
   refreshMission: () => Promise<void>;
   acceptOffer: (emergencyId: string, offerId: string) => Promise<{ success: boolean; message: string }>;
   rejectOffer: (emergencyId: string, offerId: string) => Promise<{ success: boolean; message: string }>;
-  updateStatus: (emergencyId: string, newStatus: string, lat?: number, lng?: number) => Promise<{ success: boolean; message: string }>;
+  updateStatus: (emergencyId: string, newStatus: string, lat?: number, lng?: number) => Promise<UpdateStatusResult>;
 }
 
 export function useDriverDispatch(driverId: string | undefined): UseDriverDispatchResult {
@@ -117,7 +124,7 @@ export function useDriverDispatch(driverId: string | undefined): UseDriverDispat
     }
   };
 
-  const updateStatus = async (emergencyId: string, newStatus: string, lat?: number, lng?: number) => {
+  const updateStatus = async (emergencyId: string, newStatus: string, lat?: number, lng?: number): Promise<UpdateStatusResult> => {
     if (!driverId) return { success: false, message: 'Driver not logged in' };
     
     try {
@@ -132,7 +139,11 @@ export function useDriverDispatch(driverId: string | undefined): UseDriverDispat
       const response = await apiUpdateMissionStatus(payload);
       await fetchMission(); // Refresh mission data after status change
       
-      return response;
+      return {
+        success: response.success,
+        message: response.message,
+        recommended_hospital: response.recommended_hospital,
+      };
     } catch (err: any) {
       return { success: false, message: err.message || 'Failed to update mission status' };
     }

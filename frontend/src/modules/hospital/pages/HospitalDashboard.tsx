@@ -7,6 +7,7 @@ import {
   LogOut,
   Menu,
   Radio,
+  Settings,
   ShieldCheck,
   X,
   type LucideIcon,
@@ -35,12 +36,19 @@ import {
   createInitialHospitalOpsState,
   MUMBAI_REAL_HOSPITALS,
 } from '@shared/utils/hospitalDemoData';
+import { fetchHospitalProfile, updateHospitalProfile } from '@shared/utils/hospitalAuthApi';
 import {
   acceptHospitalCarAccidentAlert,
   listCarAccidentAlerts,
   rejectHospitalCarAccidentAlert,
   type CarAccidentAlert as ApiCarAccidentAlert,
 } from '@shared/utils/carAccidentApi';
+import {
+  acceptHospitalEmergency,
+  listHospitalPendingEmergencies,
+  rejectHospitalEmergency,
+  type PendingEmergencyItem,
+} from '@shared/utils/emergencyApi';
 import {
   buildRoadRoute,
   createRoadAnchorAssignments,
@@ -58,12 +66,13 @@ const ROSTER_SYNC_SECONDS = 12;
 const DISPATCH_OFFER_SECONDS = 60;
 const MOBILE_NAV_QUERY = '(max-width: 980px)';
 
-type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds' | 'carAccidents';
+type HospitalSectionKey = 'dashboard' | 'queue' | 'ambulance' | 'beds' | 'carAccidents' | 'settings';
 
 const hospitalSections: Array<{ key: HospitalSectionKey; label: string; description: string; icon: LucideIcon }> = [
   { key: 'dashboard',  label: 'Dashboard',            description: 'Analytics and live hospital overview',           icon: LayoutDashboard },
   { key: 'queue',      label: 'Patient Queue',         description: 'Queue, live map, and dispatch control',          icon: Radio },
   { key: 'beds',       label: 'Bed Manager',           description: 'Bed and ICU capacity controls',                  icon: ShieldCheck },
+  { key: 'settings',   label: 'Settings',              description: 'Update hospital profile and information',         icon: Settings },
   { key: 'carAccidents', label: 'Car Accidents',       description: 'Airbag-triggered accident alerts and victim details', icon: CarFront },
 ];
 
@@ -567,6 +576,35 @@ function requestIdFromAlertId(alertId: string) {
   return `CAR-${alertId}`;
 }
 
+function requestIdFromEmergencyId(emergencyId: string) {
+  return `EM-${emergencyId}`;
+}
+
+function toSeverityLevel(value: string | undefined): SeverityLevel {
+  const normalized = (value ?? '').trim().toLowerCase();
+  if (normalized === 'critical' || normalized === 'high' || normalized === 'moderate' || normalized === 'low') {
+    return normalized;
+  }
+
+  if (normalized === 'medium') {
+    return 'moderate';
+  }
+
+  return 'low';
+}
+
+function formatEmergencyType(value: string | undefined) {
+  const normalized = (value ?? '').replace(/[_-]+/g, ' ').trim();
+  if (!normalized) {
+    return 'Emergency';
+  }
+
+  return normalized
+    .split(/\s+/)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+}
+
 function getActiveHospitalCandidateId(request: PatientRequest): string | null {
   const candidates = request.hospitalCandidateIds ?? [];
   if (candidates.length === 0) {
@@ -618,6 +656,81 @@ function toLiveRequest(alert: ApiCarAccidentAlert, previousRequest?: PatientRequ
       ? previousRequest?.hospitalAcceptedAt ?? new Date().toISOString()
       : undefined,
     notes: [previousRequest?.notes, alert.notes].filter(Boolean).join(' | ') || undefined,
+  };
+}
+
+function toPendingEmergencyRequest(
+  item: PendingEmergencyItem,
+  fallbackLocation: { lat: number; lng: number },
+  previousRequest?: PatientRequest,
+): PatientRequest {
+  const callerNumber = item.phoneNumber?.trim();
+  const fallbackName = callerNumber ? `Caller ${callerNumber.slice(-4)}` : 'Emergency Caller';
+  const reportedAt = item.createdAt ?? previousRequest?.reportedAt ?? new Date().toISOString();
+
+  return {
+    id: requestIdFromEmergencyId(item.emergencyId),
+    sourceEmergencyId: item.emergencyId,
+    patientName: previousRequest?.patientName ?? fallbackName,
+    age: previousRequest?.age ?? 35,
+    symptom: previousRequest?.symptom ?? `${formatEmergencyType(item.emergencyType)} intake`,
+    severity: toSeverityLevel(item.severity),
+    location: previousRequest?.location ?? { ...fallbackLocation },
+    address: item.address || previousRequest?.address || 'Address unavailable',
+    channel: previousRequest?.channel ?? 'whatsapp',
+    reportedAt,
+    status: 'new',
+    hospitalCandidateIds: Array.isArray(item.notifiedHospitals) ? item.notifiedHospitals : [],
+    hospitalRejectedIds: previousRequest?.hospitalRejectedIds ?? [],
+    notes:
+      [previousRequest?.notes, callerNumber ? `Caller: ${callerNumber}` : undefined]
+        .filter(Boolean)
+        .join(' | ') || undefined,
+  };
+}
+
+function syncPendingEmergenciesIntoOpsState(
+  state: HospitalOpsState,
+  pendingEmergencies: PendingEmergencyItem[],
+): HospitalOpsState {
+  const previousRequestsByEmergencyId = new Map<string, PatientRequest>();
+  state.requests.forEach((request) => {
+    if (request.sourceEmergencyId) {
+      previousRequestsByEmergencyId.set(request.sourceEmergencyId, request);
+    }
+  });
+
+  const nextEmergencyRequests = pendingEmergencies.map((emergency) =>
+    toPendingEmergencyRequest(
+      emergency,
+      state.hospital.location,
+      previousRequestsByEmergencyId.get(emergency.emergencyId),
+    ),
+  );
+  const existingRequestIdSet = new Set(state.requests.map((request) => request.id));
+  const incomingEvents = nextEmergencyRequests
+    .filter((request) => !existingRequestIdSet.has(request.id))
+    .map((request) =>
+      createEvent(
+        'incoming',
+        `${request.id} synced from emergency intake queue at ${request.address}.`,
+        request.id,
+      ),
+    );
+
+  const preservedAlertRequests = state.requests.filter((request) => Boolean(request.sourceAlertId));
+  const retainedRequestIds = new Set(
+    [...nextEmergencyRequests, ...preservedAlertRequests].map((request) => request.id),
+  );
+  const nextPendingOffers = (state.pendingDispatchOffers ?? []).filter((offer) =>
+    retainedRequestIds.has(offer.requestId),
+  );
+
+  return {
+    ...state,
+    requests: [...nextEmergencyRequests, ...preservedAlertRequests],
+    pendingDispatchOffers: nextPendingOffers,
+    events: [...incomingEvents, ...state.events].slice(0, 60),
   };
 }
 
@@ -725,9 +838,11 @@ function syncLiveAlertsIntoOpsState(state: HospitalOpsState, alerts: ApiCarAccid
       ),
     );
 
+  const preservedEmergencyRequests = state.requests.filter((request) => Boolean(request.sourceEmergencyId));
+
   return {
     ...state,
-    requests: nextRequests,
+    requests: [...preservedEmergencyRequests, ...nextRequests],
     pendingDispatchOffers: nextPendingOffers,
     events: [...incomingEvents, ...state.events].slice(0, 60),
   };
@@ -768,6 +883,11 @@ export function HospitalDashboard() {
     [hospitalUser],
   );
 
+  const hospitalProfileId = useMemo(
+    () => hospitalUser?.hospitalId ?? hospitalUser?.id ?? hospitalUser?.email ?? activeHospitalRef.id,
+    [activeHospitalRef.id, hospitalUser?.email, hospitalUser?.hospitalId, hospitalUser?.id],
+  );
+
   const [opsState, setOpsState] = useState<HospitalOpsState>(() => loadInitialState(activeHospitalRef));
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
@@ -779,9 +899,19 @@ export function HospitalDashboard() {
   const [carAccidents, setCarAccidents] = useState<ApiCarAccidentAlert[]>([]);
   const [isCarAccidentsLoading, setIsCarAccidentsLoading] = useState(false);
   const [carAccidentsError, setCarAccidentsError] = useState<string | null>(null);
+  const [isEmergencyQueueLoading, setIsEmergencyQueueLoading] = useState(false);
+  const [emergencyQueueError, setEmergencyQueueError] = useState<string | null>(null);
   const [backendAvailableDriversCount, setBackendAvailableDriversCount] = useState<number | null>(null);
   const [globalAvailableMapDrivers, setGlobalAvailableMapDrivers] = useState<DriverUnit[]>([]);
   const [alertsBaselineIso, setAlertsBaselineIso] = useState<string>('1970-01-01T00:00:00.000Z');
+  const [settingsName, setSettingsName] = useState<string>('');
+  const [settingsEmail, setSettingsEmail] = useState<string>('');
+  const [settingsAddress, setSettingsAddress] = useState<string>('');
+  const [settingsBedCapacity, setSettingsBedCapacity] = useState<number>(0);
+  const [settingsLat, setSettingsLat] = useState<string>('');
+  const [settingsLng, setSettingsLng] = useState<string>('');
+  const [isSettingsSaving, setIsSettingsSaving] = useState<boolean>(false);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const requestListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -795,9 +925,85 @@ export function HospitalDashboard() {
     setRequestFilter('all');
     setActiveSection('dashboard');
     setDispatchNotice(null);
+    setIsEmergencyQueueLoading(false);
+    setEmergencyQueueError(null);
     setBackendAvailableDriversCount(null);
     setGlobalAvailableMapDrivers([]);
   }, [activeHospitalRef, hospitalUser]);
+
+  useEffect(() => {
+    if (!hospitalUser) {
+      return;
+    }
+
+    setSettingsName(hospitalUser.name || activeHospitalRef.name);
+    setSettingsEmail(hospitalUser.email || '');
+    setSettingsAddress(hospitalUser.address ?? activeHospitalRef.address);
+    setSettingsBedCapacity(hospitalUser.bedCapacity ?? 120);
+    setSettingsLat(
+      typeof hospitalUser.location?.lat === 'number'
+        ? hospitalUser.location.lat.toFixed(6)
+        : activeHospitalRef.location.lat.toFixed(6),
+    );
+    setSettingsLng(
+      typeof hospitalUser.location?.lng === 'number'
+        ? hospitalUser.location.lng.toFixed(6)
+        : activeHospitalRef.location.lng.toFixed(6),
+    );
+    setSettingsNotice(null);
+  }, [
+    activeHospitalRef.address,
+    activeHospitalRef.location.lat,
+    activeHospitalRef.location.lng,
+    activeHospitalRef.name,
+    hospitalUser,
+  ]);
+
+  useEffect(() => {
+    if (!hospitalProfileId) {
+      return;
+    }
+
+    let isDisposed = false;
+
+    const loadHospitalSettings = async () => {
+      try {
+        const profile = await fetchHospitalProfile(hospitalProfileId);
+        if (isDisposed || !profile.success) {
+          return;
+        }
+
+        setSettingsName(profile.name || activeHospitalRef.name);
+        setSettingsEmail(profile.email || '');
+        setSettingsAddress(profile.address ?? activeHospitalRef.address);
+        setSettingsBedCapacity(profile.bedCapacity ?? 120);
+        setSettingsLat(
+          typeof profile.location?.lat === 'number'
+            ? profile.location.lat.toFixed(6)
+            : activeHospitalRef.location.lat.toFixed(6),
+        );
+        setSettingsLng(
+          typeof profile.location?.lng === 'number'
+            ? profile.location.lng.toFixed(6)
+            : activeHospitalRef.location.lng.toFixed(6),
+        );
+      } catch {
+        // Keep local settings data when profile fetch is temporarily unavailable.
+      }
+    };
+
+    void loadHospitalSettings();
+
+    return () => {
+      isDisposed = true;
+    };
+  }, [
+    activeHospitalRef.address,
+    activeHospitalRef.location.lat,
+    activeHospitalRef.location.lng,
+    activeHospitalRef.name,
+    hospitalProfileId,
+  ]);
 
   useEffect(() => {
     if (!hospitalUser || typeof window === 'undefined') {
@@ -1095,6 +1301,15 @@ export function HospitalDashboard() {
           return true;
         }
 
+        if (request.sourceEmergencyId) {
+          const candidates = request.hospitalCandidateIds ?? [];
+          if (candidates.length === 0) {
+            return true;
+          }
+
+          return candidates.some((candidateId) => isCurrentHospitalIdentity(candidateId));
+        }
+
         return isCurrentHospitalIdentity(getActiveHospitalCandidateId(request));
       }),
     [isCurrentHospitalIdentity, opsState.requests],
@@ -1102,9 +1317,18 @@ export function HospitalDashboard() {
 
   const dispatchableRequests = useMemo(
     () =>
-      openRequests.filter(
-        (request) => !request.hospitalId && isCurrentHospitalIdentity(getActiveHospitalCandidateId(request)),
-      ),
+      openRequests.filter((request) => {
+        if (request.hospitalId) {
+          return false;
+        }
+
+        if (request.sourceEmergencyId) {
+          const candidates = request.hospitalCandidateIds ?? [];
+          return candidates.length === 0 || candidates.some((candidateId) => isCurrentHospitalIdentity(candidateId));
+        }
+
+        return isCurrentHospitalIdentity(getActiveHospitalCandidateId(request));
+      }),
     [isCurrentHospitalIdentity, openRequests],
   );
 
@@ -1115,9 +1339,18 @@ export function HospitalDashboard() {
 
   const queueDispatchableRequests = useMemo(
     () =>
-      queueRequests.filter(
-        (request) => !request.hospitalId && isCurrentHospitalIdentity(getActiveHospitalCandidateId(request)),
-      ),
+      queueRequests.filter((request) => {
+        if (request.hospitalId) {
+          return false;
+        }
+
+        if (request.sourceEmergencyId) {
+          const candidates = request.hospitalCandidateIds ?? [];
+          return candidates.length === 0 || candidates.some((candidateId) => isCurrentHospitalIdentity(candidateId));
+        }
+
+        return isCurrentHospitalIdentity(getActiveHospitalCandidateId(request));
+      }),
     [isCurrentHospitalIdentity, queueRequests],
   );
 
@@ -1183,8 +1416,22 @@ export function HospitalDashboard() {
   );
 
   const isAwaitingHospitalDecision = useCallback(
-    (request: PatientRequest) =>
-      !request.hospitalId && isCurrentHospitalIdentity(getActiveHospitalCandidateId(request)),
+    (request: PatientRequest) => {
+      if (request.hospitalId) {
+        return false;
+      }
+
+      if (request.sourceEmergencyId) {
+        const candidates = request.hospitalCandidateIds ?? [];
+        if (candidates.length === 0) {
+          return true;
+        }
+
+        return candidates.some((candidateId) => isCurrentHospitalIdentity(candidateId));
+      }
+
+      return isCurrentHospitalIdentity(getActiveHospitalCandidateId(request));
+    },
     [isCurrentHospitalIdentity],
   );
 
@@ -1192,6 +1439,64 @@ export function HospitalDashboard() {
     (request: PatientRequest) => isCurrentHospitalIdentity(request.hospitalId),
     [isCurrentHospitalIdentity],
   );
+
+  const refreshPendingEmergencies = useCallback(
+    async (withLoading: boolean) => {
+      if (!isHospitalAuthenticated || !hospitalUser) {
+        setEmergencyQueueError(null);
+        setIsEmergencyQueueLoading(false);
+        return;
+      }
+
+      if (withLoading) {
+        setIsEmergencyQueueLoading(true);
+      }
+
+      try {
+        const pendingEmergencies = await listHospitalPendingEmergencies(currentHospitalDecisionId);
+        setEmergencyQueueError(null);
+        setOpsState((previousState) => syncPendingEmergenciesIntoOpsState(previousState, pendingEmergencies));
+      } catch (error) {
+        setEmergencyQueueError(
+          error instanceof Error ? error.message : 'Unable to sync pending emergency queue.',
+        );
+      } finally {
+        if (withLoading) {
+          setIsEmergencyQueueLoading(false);
+        }
+      }
+    },
+    [currentHospitalDecisionId, hospitalUser, isHospitalAuthenticated],
+  );
+
+  useEffect(() => {
+    if (!isHospitalAuthenticated || !hospitalUser) {
+      setEmergencyQueueError(null);
+      setIsEmergencyQueueLoading(false);
+      return;
+    }
+
+    let isDisposed = false;
+
+    const runRefresh = async (withLoading: boolean) => {
+      if (isDisposed) {
+        return;
+      }
+
+      await refreshPendingEmergencies(withLoading);
+    };
+
+    void runRefresh(true);
+
+    const intervalId = window.setInterval(() => {
+      void runRefresh(false);
+    }, 3_000);
+
+    return () => {
+      isDisposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [hospitalUser, isHospitalAuthenticated, refreshPendingEmergencies]);
 
   useEffect(() => {
     if (!selectedRequestId) {
@@ -1213,12 +1518,31 @@ export function HospitalDashboard() {
 
   const handleHospitalAlertDecision = useCallback(
     async (request: PatientRequest, action: 'accept' | 'reject') => {
-      if (!request.sourceAlertId) {
-        setDispatchNotice('This request is not linked to a live alert.');
-        return;
-      }
-
       if (action === 'accept' && !hasHospitalCapacity(opsState.hospital.beds)) {
+        if (request.sourceEmergencyId) {
+          try {
+            await rejectHospitalEmergency({
+              hospitalId: currentHospitalDecisionId,
+              emergencyId: request.sourceEmergencyId,
+            });
+            setDispatchNotice('Capacity unavailable. Emergency moved to the next nearest hospital.');
+            await refreshPendingEmergencies(false);
+          } catch (error) {
+            setDispatchNotice(
+              error instanceof Error
+                ? error.message
+                : 'Unable to reject emergency request for capacity overflow.',
+            );
+          }
+
+          return;
+        }
+
+        if (!request.sourceAlertId) {
+          setDispatchNotice('This request is not linked to a live alert.');
+          return;
+        }
+
         try {
           await rejectHospitalCarAccidentAlert(request.sourceAlertId, currentHospitalDecisionId);
           setDispatchNotice('Capacity unavailable. Alert moved to next nearest hospital.');
@@ -1227,6 +1551,35 @@ export function HospitalDashboard() {
           setDispatchNotice(error instanceof Error ? error.message : 'Unable to reject alert for capacity overflow.');
         }
 
+        return;
+      }
+
+      if (request.sourceEmergencyId) {
+        try {
+          if (action === 'accept') {
+            const response = await acceptHospitalEmergency({
+              hospitalId: currentHospitalDecisionId,
+              emergencyId: request.sourceEmergencyId,
+            });
+            setDispatchNotice(response.message || `Hospital accepted ${request.id}.`);
+          } else {
+            const response = await rejectHospitalEmergency({
+              hospitalId: currentHospitalDecisionId,
+              emergencyId: request.sourceEmergencyId,
+            });
+            setDispatchNotice(response.message || `Hospital rejected ${request.id}.`);
+          }
+
+          await refreshPendingEmergencies(false);
+        } catch (error) {
+          setDispatchNotice(error instanceof Error ? error.message : 'Unable to submit hospital decision.');
+        }
+
+        return;
+      }
+
+      if (!request.sourceAlertId) {
+        setDispatchNotice('This request is not linked to a live alert.');
         return;
       }
 
@@ -1244,7 +1597,7 @@ export function HospitalDashboard() {
         setDispatchNotice(error instanceof Error ? error.message : 'Unable to submit hospital decision.');
       }
     },
-    [currentHospitalDecisionId, opsState.hospital.beds, refreshCarAccidents],
+    [currentHospitalDecisionId, opsState.hospital.beds, refreshCarAccidents, refreshPendingEmergencies],
   );
 
   const handleMapSelectRequest = useCallback((requestId: string) => {
@@ -1303,12 +1656,13 @@ export function HospitalDashboard() {
     setCarAccidents([]);
     setOpsState((previousState) => ({
       ...previousState,
-      requests: [],
+      requests: previousState.requests.filter((request) => Boolean(request.sourceEmergencyId)),
       pendingDispatchOffers: [],
     }));
     setSelectedRequestId(null);
-    setDispatchNotice('Cleared all existing requests. Only new alerts will appear now.');
-  }, [activeHospitalRef.id]);
+    setDispatchNotice('Cleared existing alert requests. Pending emergency queue remains synced.');
+    void refreshPendingEmergencies(false);
+  }, [activeHospitalRef.id, refreshPendingEmergencies]);
 
   const handleBedAdjustment = (field: keyof HospitalBedState, delta: number, label: string) => {
     setOpsState((prev) => {
@@ -1322,6 +1676,113 @@ export function HospitalDashboard() {
       );
     });
   };
+
+  const handleSaveHospitalSettings = useCallback(async () => {
+    if (!hospitalProfileId) {
+      setSettingsNotice('Unable to resolve hospital identity for saving settings.');
+      return;
+    }
+
+    const trimmedName = settingsName.trim();
+    const trimmedEmail = settingsEmail.trim().toLowerCase();
+    const trimmedAddress = settingsAddress.trim();
+
+    if (!trimmedName || !trimmedEmail) {
+      setSettingsNotice('Hospital name and email are required.');
+      return;
+    }
+
+    const normalizedBeds = Number.isFinite(settingsBedCapacity)
+      ? Math.max(1, Math.round(settingsBedCapacity))
+      : 1;
+
+    const latInput = settingsLat.trim();
+    const lngInput = settingsLng.trim();
+
+    const payload: {
+      hospital_id: string;
+      name: string;
+      email: string;
+      address: string;
+      bed_capacity: number;
+      location?: { lat: number; lng: number };
+    } = {
+      hospital_id: hospitalProfileId,
+      name: trimmedName,
+      email: trimmedEmail,
+      address: trimmedAddress,
+      bed_capacity: normalizedBeds,
+    };
+
+    if (latInput || lngInput) {
+      const parsedLat = Number(latInput);
+      const parsedLng = Number(lngInput);
+
+      if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
+        setSettingsNotice('Latitude and longitude must be valid numbers.');
+        return;
+      }
+
+      payload.location = { lat: parsedLat, lng: parsedLng };
+    }
+
+    setIsSettingsSaving(true);
+    try {
+      const result = await updateHospitalProfile(payload);
+
+      if (!result.success) {
+        setSettingsNotice(result.message || 'Unable to update hospital settings right now.');
+        return;
+      }
+
+      const nextName = result.user?.name || trimmedName;
+      const nextAddress = result.user?.address ?? trimmedAddress;
+      const nextLocation = result.user?.location ?? payload.location;
+      const nextBedCapacity = result.user?.bedCapacity ?? normalizedBeds;
+
+      setOpsState((previousState) => {
+        const nextBeds = normalizeBedState({
+          ...previousState.hospital.beds,
+          totalBeds: nextBedCapacity,
+          occupiedBeds: Math.min(previousState.hospital.beds.occupiedBeds, nextBedCapacity),
+          icuTotal: Math.min(previousState.hospital.beds.icuTotal, nextBedCapacity),
+        });
+
+        return {
+          ...previousState,
+          hospital: {
+            ...previousState.hospital,
+            name: nextName,
+            address: nextAddress,
+            location: nextLocation ? { ...nextLocation } : previousState.hospital.location,
+            beds: nextBeds,
+          },
+        };
+      });
+
+      setSettingsName(nextName);
+      setSettingsAddress(nextAddress);
+      setSettingsBedCapacity(nextBedCapacity);
+      if (nextLocation) {
+        setSettingsLat(nextLocation.lat.toFixed(6));
+        setSettingsLng(nextLocation.lng.toFixed(6));
+      }
+
+      setSettingsNotice(result.message || 'Hospital settings updated successfully.');
+    } catch {
+      setSettingsNotice('Unable to update hospital settings right now.');
+    } finally {
+      setIsSettingsSaving(false);
+    }
+  }, [
+    hospitalProfileId,
+    settingsAddress,
+    settingsBedCapacity,
+    settingsEmail,
+    settingsLat,
+    settingsLng,
+    settingsName,
+  ]);
 
   const handleSectionChange = (section: HospitalSectionKey) => {
     setActiveSection(section);
@@ -1623,7 +2084,7 @@ export function HospitalDashboard() {
           {activeSection === 'queue' && (
             <section className="hospital-queue-layout">
               <section className="hospital-panel request-panel">
-                <div className="panel-head"><h2>Patient Queue</h2><p>Live hospital intake queue. Car accident alerts are handled in Car Accidents.</p></div>
+                <div className="panel-head"><h2>Patient Queue</h2><p>Live hospital intake queue synced from pending emergencies. Car accident alerts are handled in Car Accidents.</p></div>
                 <div className="request-filters" role="tablist" aria-label="Request filters">
                   {requestFilters.map((f) => (
                     <button key={f.key} type="button" className={`filter-chip${requestFilter === f.key ? ' active' : ''}`} onClick={() => setRequestFilter(f.key)}>
@@ -1632,7 +2093,13 @@ export function HospitalDashboard() {
                   ))}
                 </div>
                 <div className="request-list" ref={requestListRef}>
-                  {filteredRequests.length === 0 ? (
+                  {isEmergencyQueueLoading && filteredRequests.length === 0 ? (
+                    <p className="empty-state">Syncing pending emergencies...</p>
+                  ) : null}
+                  {!isEmergencyQueueLoading && emergencyQueueError ? (
+                    <p className="empty-state">{emergencyQueueError}</p>
+                  ) : null}
+                  {!isEmergencyQueueLoading && !emergencyQueueError && filteredRequests.length === 0 ? (
                     <p className="empty-state">No requests for this filter.</p>
                   ) : (
                     filteredRequests.map((request) => {
@@ -1913,6 +2380,89 @@ export function HospitalDashboard() {
                   })}
                 </div>
               ) : null}
+            </section>
+          )}
+
+          {activeSection === 'settings' && (
+            <section className="hospital-settings-layout">
+              <section className="hospital-panel hospital-settings-panel">
+                <div className="panel-head">
+                  <h2>Hospital Settings</h2>
+                  <p>Only this hospital account can update these profile and capacity details.</p>
+                </div>
+
+                <div className="hospital-settings-grid" aria-label="Hospital settings form">
+                  <label>
+                    Hospital Name
+                    <input
+                      type="text"
+                      value={settingsName}
+                      onChange={(event) => setSettingsName(event.target.value)}
+                      placeholder="Hospital name"
+                    />
+                  </label>
+                  <label>
+                    Account Email
+                    <input
+                      type="email"
+                      value={settingsEmail}
+                      onChange={(event) => setSettingsEmail(event.target.value)}
+                      placeholder="hospital@example.com"
+                    />
+                  </label>
+                  <label className="hospital-settings-grid-col-span-2">
+                    Address
+                    <input
+                      type="text"
+                      value={settingsAddress}
+                      onChange={(event) => setSettingsAddress(event.target.value)}
+                      placeholder="Hospital address"
+                    />
+                  </label>
+                  <label>
+                    Bed Capacity
+                    <input
+                      type="number"
+                      min={1}
+                      value={settingsBedCapacity}
+                      onChange={(event) => setSettingsBedCapacity(Number(event.target.value) || 1)}
+                    />
+                  </label>
+                  <label>
+                    Latitude
+                    <input
+                      type="text"
+                      value={settingsLat}
+                      onChange={(event) => setSettingsLat(event.target.value)}
+                      placeholder="19.076000"
+                    />
+                  </label>
+                  <label>
+                    Longitude
+                    <input
+                      type="text"
+                      value={settingsLng}
+                      onChange={(event) => setSettingsLng(event.target.value)}
+                      placeholder="72.877700"
+                    />
+                  </label>
+                </div>
+
+                <div className="hospital-settings-actions">
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      void handleSaveHospitalSettings();
+                    }}
+                    disabled={isSettingsSaving}
+                  >
+                    {isSettingsSaving ? 'Saving' : 'Save Settings'}
+                  </button>
+                </div>
+
+                {settingsNotice ? <p className="hospital-settings-notice">{settingsNotice}</p> : null}
+              </section>
             </section>
           )}
 
